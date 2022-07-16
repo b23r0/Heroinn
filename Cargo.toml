@@ -1,0 +1,11 @@
+[package]
+name = "heroinn"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eframe = "0.18"
+egui_extras = {version = "0.18" , features = ["image"]}
+image = { version = "0.24", features = ["jpeg", "png", "ico"] }
