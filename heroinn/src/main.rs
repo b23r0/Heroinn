@@ -14,10 +14,19 @@ enum HeroinnProtocol{
     TCP
 }
 
-#[derive(Debug,PartialEq)]
+#[derive(PartialEq)]
 enum HeroinnPlatform{
     LinuxX64,
     WindowsX64
+}
+
+impl std::fmt::Debug for HeroinnPlatform{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LinuxX64 => write!(f, "Linux_x86_64"),
+            Self::WindowsX64 => write!(f, "Windows_x86_64"),
+        }
+    }
 }
 
 fn doc_link_label<'a>(title: &'a str, search_term: &'a str) -> impl egui::Widget + 'a {
@@ -50,6 +59,7 @@ struct HeroinnApp{
     combox_listen_protocol : HeroinnProtocol,
     text_generator_port : String,
     text_generator_address : String,
+    text_generator_remark : String,
     combox_generator_protocol : HeroinnProtocol,
     combox_generator_platform : HeroinnPlatform,
     host_image : egui_extras::RetainedImage,
@@ -66,6 +76,7 @@ impl Default for HeroinnApp {
             combox_listen_protocol : HeroinnProtocol::TCP,
             text_generator_port : String::new(),
             text_generator_address : String::new(),
+            text_generator_remark : String::new(),
             combox_generator_protocol : HeroinnProtocol::TCP,
             combox_generator_platform : HeroinnPlatform::WindowsX64,
             host_image : egui_extras::RetainedImage::from_image_bytes(
@@ -184,29 +195,33 @@ impl HeroinnApp {
                                 .selected_text(format!("{:?}", self.combox_generator_protocol))
                                 .width(280.0)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, "TCP");
+                                    ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, format!("{:?}" , HeroinnProtocol::TCP));
                                 });
                                 ui.end_row();
 
                                 ui.add(doc_link_label("Platform", "label,heading"));
                                 egui::ComboBox::from_id_source(2)
                                 .width(280.0)
-                                .selected_text(format!("Windows_x86_64"))
+                                .selected_text(format!("{:?}" , self.combox_generator_platform))
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.combox_generator_platform, HeroinnPlatform::WindowsX64, "Windows_x86_64");
-                                    ui.selectable_value(&mut self.combox_generator_platform, HeroinnPlatform::LinuxX64, "Linux_x86_64");
+                                    ui.selectable_value(&mut self.combox_generator_platform, HeroinnPlatform::WindowsX64, format!("{:?}" , HeroinnPlatform::WindowsX64));
+                                    ui.selectable_value(&mut self.combox_generator_platform, HeroinnPlatform::LinuxX64, format!("{:?}" , HeroinnPlatform::LinuxX64));
                                 });
+                                ui.end_row();
+
+                                ui.add(doc_link_label("Remark", "label,heading"));
+                                ui.add(egui::TextEdit::singleline(&mut self.text_generator_remark).hint_text("default"));
                                 ui.end_row();
                             });
                             ui.separator();
             
-                            egui::Window::new("message")
-                            .collapsible(false)
-                            .resizable(false)
-                            .show(ctx, |ui| {
-                                let str = format!("address : {} , port : {} , protocol : {:?} , platform : {:?}" , self.text_generator_address , self.text_generator_port , self.combox_generator_protocol , self.combox_generator_platform);
-                                ui.label(str);
-                            });
+                            //egui::Window::new("message")
+                            //.collapsible(false)
+                            //.resizable(false)
+                            //.show(ctx, |ui| {
+                            //    let str = format!("address : {} , port : {} , protocol : {:?} , platform : {:?}" , self.text_generator_address , self.text_generator_port , self.combox_generator_protocol , self.combox_generator_platform);
+                            //    ui.label(str);
+                            //});
                             if ui.button("Generate Now").clicked(){
 
                             };
@@ -314,7 +329,7 @@ impl HeroinnApp {
                     }
                 };
 
-                for row_index in 0..20 {
+                for _ in 0..20 {
                     let row_height = 30.0;
                     body.row(row_height, |mut row| {
 
@@ -337,7 +352,7 @@ impl HeroinnApp {
                             ui.label("11 Kb/s");
                         }).context_menu(menu);
                         row.col(|ui| {
-                            ui.label(clock_emoji(row_index));
+                            ui.label("CHINA UNICOM");
                         }).context_menu(menu);
                         row.col(|ui| {
                             ui.label("10s");
@@ -349,9 +364,4 @@ impl HeroinnApp {
                 }
             });
     }
-}
-fn clock_emoji(row_index: usize) -> String {
-    char::from_u32(0x1f550 + row_index as u32 % 24)
-        .unwrap()
-        .to_string()
 }
