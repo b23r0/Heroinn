@@ -1,5 +1,9 @@
+use controller::{add_listener, all_listener, remove_listener};
 use eframe::egui::{self};
 use egui_extras::{Size, StripBuilder , TableBuilder};
+use heroinn_util::*;
+
+mod controller;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -7,11 +11,6 @@ enum SwitchDock {
     Hosts,
     Listener,
     Generator
-}
-
-#[derive(Debug,PartialEq)]
-enum HeroinnProtocol{
-    TCP
 }
 
 #[derive(PartialEq)]
@@ -151,7 +150,7 @@ impl HeroinnApp {
                     ui.label("Port : ");
                     ui.add(egui::TextEdit::singleline(&mut self.text_listen_port).hint_text("9001"));
                     if ui.button("Add").clicked(){
-
+                        add_listener(&self.combox_listen_protocol, self.text_listen_port.parse::<u16>().unwrap()).unwrap();
                     };
                 });
 
@@ -242,8 +241,10 @@ impl HeroinnApp {
             .striped(true)
             .cell_layout(egui::Layout::left_to_right().with_cross_align(egui::Align::Center))
             .column(Size::initial(320.0).at_least(40.0))
-            .column(Size::initial(520.0).at_least(40.0))
-            .column(Size::initial(200.0).at_least(40.0))
+            .column(Size::initial(320.0).at_least(40.0))
+            .column(Size::initial(100.0).at_least(40.0))
+            .column(Size::initial(100.0).at_least(40.0))
+            .column(Size::initial(100.0).at_least(40.0))
             .resizable(self.resizable)
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -255,13 +256,19 @@ impl HeroinnApp {
                 header.col(|ui| {
                     ui.heading("Port");
                 });
+                header.col(|ui| {
+                    ui.heading("Status");
+                });
+                header.col(|ui| {
+                    ui.heading("");
+                });
             })
             .body(|mut body| {
 
-                for _ in 0..3 {
+                for listener in all_listener() {
                     let row_height = 30.0;
                     body.row(row_height, |mut row| {
-
+                        
                         row.col(|ui| {
                             ui.add(
                                 egui::Image::new(self.listener_image.texture_id(ctx), egui::Vec2::new(30.0, 30.0))
@@ -269,10 +276,20 @@ impl HeroinnApp {
                         });
 
                         row.col(|ui| {
-                            ui.label("TCP");
+                            ui.label(format!("{:?}", listener.protocol));
                         });
                         row.col(|ui| {
-                            ui.label("23827");
+                            ui.label(format!("{}", listener.addr.port()));
+                        });
+
+                        row.col(|ui| {
+                            ui.label("Running");
+                        });
+
+                        row.col(|ui| {
+                            if ui.button("Remove").clicked(){
+                                remove_listener(listener.id);
+                            };
                         });
                     });
                 }

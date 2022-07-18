@@ -9,3 +9,6 @@ edition = "2021"
 eframe = "0.18"
 egui_extras = {version = "0.18" , features = ["image"]}
 image = { version = "0.24", features = ["jpeg", "png", "ico"] }
+heroinn_util = {path = "../heroinn_util"}
+heroinn_core = {path = "../heroinn_core"}
+lazy_static = "1.4.0"
