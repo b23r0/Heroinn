@@ -23,6 +23,12 @@ pub struct TcpConnection{
     s : TcpStream
 }
 
+impl Clone for TcpConnection{
+    fn clone(&self) -> Self {
+        Self { s: self.s.try_clone().unwrap() }
+    }
+}
+
 impl Server<TcpStream> for TcpServer{
     fn new<CBCB: 'static + Fn(Message) + Send + Copy , CB: 'static + Fn(HeroinnProtocol , Vec<u8>, SocketAddr, CBCB) + Send>(
         address : &str , 
@@ -47,6 +53,8 @@ impl Server<TcpStream> for TcpServer{
                 let cb_data = cb_data.clone();
                 match stream {
                     Ok(s) => {
+
+                        s.set_nonblocking(false).unwrap();
 
                         let peer_addr = s.peer_addr().unwrap();
                         let mut s_1 = s.try_clone().unwrap();
@@ -77,6 +85,7 @@ impl Server<TcpStream> for TcpServer{
                                 cb_data.lock().unwrap()(HeroinnProtocol::TCP , buf, peer_addr, cbcb);
                             }
 
+                            log::info!("connection closed : {}" , peer_addr);
                             connections_2.lock().unwrap().remove(&peer_addr);
                         });
 
@@ -92,6 +101,7 @@ impl Server<TcpStream> for TcpServer{
                     },
                 }
             }
+            log::info!("server closed");
         });
 
         Ok(Self{
@@ -174,4 +184,16 @@ impl Client<TcpStream> for TcpConnection{
     fn as_any(&self) -> &dyn Any {
         self
       }
+}
+
+impl Drop for TcpServer{
+    fn drop(&mut self) {
+        for i in self.connections.lock().unwrap().values(){
+            log::info!("tcpserver dropped");
+            match i.shutdown(std::net::Shutdown::Both){
+                Ok(_) => {},
+                Err(_) => {},
+            }
+        }
+    }
 }

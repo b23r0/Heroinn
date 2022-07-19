@@ -11,16 +11,21 @@ struct BasePacket{
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HostInfo{
-    ip : String,
-    host_name : String,
-    os : String ,
-    remark : String
+    pub ip : String,
+    pub host_name : String,
+    pub os : String ,
+    pub remark : String
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Heartbeat{
+    pub time : u64
 }
 
 pub struct Message{
     id : u8,
-    peer_addr : SocketAddr,
-    proto : HeroinnProtocol,
+    pub peer_addr : SocketAddr,
+    pub proto : HeroinnProtocol,
     clientid : String,
     data : String
 }
@@ -45,15 +50,41 @@ impl Message{
         })
     }
 
+    pub fn make<T : Serialize>(id : u8 , clientid: &String , data : T) -> Result<Vec<u8>>{
+        let mut ret = vec![];
+        ret.push(id);
+
+        let data = serde_json::to_string(&data)?;
+
+        let base = BasePacket{
+            clientid : clientid.clone(),
+            data: data,
+        };
+
+        let data = serde_json::to_string(&base)?;
+
+        ret.append(&mut data.as_bytes().to_vec());
+
+        Ok(ret)
+    }
+
     pub fn id(&self) -> u8{
         self.id
+    }
+
+    pub fn proto(&self) -> HeroinnProtocol {
+        self.proto.clone()
+    }
+
+    pub fn peer_addr(&self) -> SocketAddr {
+        self.peer_addr.clone()
     }
 
     pub fn clientid(&self) -> String{
         self.clientid.clone()
     }
 
-    pub fn to_host_info(&self) -> Result<HostInfo>{
+    pub fn parser(&self) -> Result<HostInfo>{
         let packet : HostInfo = serde_json::from_str(&self.data)?;
         Ok(packet)
     }

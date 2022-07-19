@@ -2,14 +2,16 @@ use std::{io::*, collections::HashMap, sync::{Mutex, atomic::{AtomicU8, Ordering
 
 use heroinn_core::HeroinnServer;
 use lazy_static::*;
-use heroinn_util::{packet::{HostInfo, Message}, HeroinnProtocol, cur_timestamp_millis, HeroinnClientMsgID};
+use heroinn_util::{packet::{HostInfo, Message}, HeroinnProtocol, HeroinnClientMsgID, cur_timestamp_secs};
 
 #[derive(Clone)]
 pub struct UIHostInfo{
-    up_trans_rate : u64,
-    down_trans_rate : u64,
-    last_heartbeat : u64,
-    info : HostInfo
+    pub peer_addr : SocketAddr,
+    pub proto : HeroinnProtocol,
+    pub up_trans_rate : u64,
+    pub down_trans_rate : u64,
+    pub last_heartbeat : u64,
+    pub info : HostInfo
 }
 
 #[derive(Clone)]
@@ -29,20 +31,24 @@ lazy_static!{
 
 pub fn cb_msg(msg : Message){
 
+    let mut hosts = G_ONLINE_HOSTS.lock().unwrap();
+
     match HeroinnClientMsgID::from(msg.id()){
         HeroinnClientMsgID::HostInfo => {
-
-            let mut hosts = G_ONLINE_HOSTS.lock().unwrap();
-
+            log::info!("hostinfo : {}" , msg.clientid());
             if hosts.contains_key(&msg.clientid()){
                 let v = hosts.get_mut(&msg.clientid()).unwrap();
-                *v = UIHostInfo{ up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_millis(), info: msg.to_host_info().unwrap() };
+                *v = UIHostInfo{ peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() };
             } else {
-                hosts.insert(msg.clientid() ,UIHostInfo{ up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_millis(), info: msg.to_host_info().unwrap() } );
+                hosts.insert(msg.clientid() ,UIHostInfo{peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() } );
             }
         },
         HeroinnClientMsgID::Heartbeat => {
-
+            log::info!("heartbeat : {}" , msg.clientid());
+            if hosts.contains_key(&msg.clientid()){
+                let v = hosts.get_mut(&msg.clientid()).unwrap();
+                v.last_heartbeat = cur_timestamp_secs();
+            }
         },
         HeroinnClientMsgID::Unknow => {
 
@@ -52,7 +58,7 @@ pub fn cb_msg(msg : Message){
 
 pub fn all_listener() -> Vec<UIListener>{
     let mut ret : Vec<UIListener> = vec![];
-    let mut listeners = G_LISTENERS.lock().unwrap();
+    let listeners = G_LISTENERS.lock().unwrap();
 
     for k in listeners.keys(){
         if let Some(v) = listeners.get(k){
@@ -81,4 +87,18 @@ pub fn remove_listener(id : u8){
         v.close();
         listener.remove(&id);
     }
+}
+
+pub fn all_host() -> Vec<UIHostInfo>{
+    let mut ret : Vec<UIHostInfo> = vec![];
+
+    let hosts = G_ONLINE_HOSTS.lock().unwrap();
+
+    for k in hosts.keys(){
+        if let Some(v) = hosts.get(k){
+            ret.push(v.clone());
+        }
+    }
+
+    ret
 }

@@ -56,11 +56,20 @@ pub enum HeroinnProtocol{
     TCP
 }
 
-pub fn cur_timestamp_millis() -> u64{
+pub fn cur_timestamp_millis() -> u128{
     std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap()
     .as_millis()
+    .try_into()
+    .unwrap_or(0)
+}
+
+pub fn cur_timestamp_secs() -> u64{
+    std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_secs()
     .try_into()
     .unwrap_or(0)
 }

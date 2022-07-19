@@ -24,7 +24,10 @@ impl HeroinnServer{
                 cb(msg);
             },
             HeroinnClientMsgID::Unknow => {},
-            HeroinnClientMsgID::Heartbeat => {},
+            HeroinnClientMsgID::Heartbeat => {
+                let msg = Message::new(peer_addr , proto , &data).unwrap();
+                cb(msg);
+            },
         }
     }
 

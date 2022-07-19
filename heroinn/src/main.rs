@@ -1,7 +1,9 @@
-use controller::{add_listener, all_listener, remove_listener};
+use controller::*;
 use eframe::egui::{self};
 use egui_extras::{Size, StripBuilder , TableBuilder};
 use heroinn_util::*;
+use log::LevelFilter;
+use simple_logger::SimpleLogger;
 
 mod controller;
 
@@ -42,6 +44,9 @@ fn doc_link_label<'a>(title: &'a str, search_term: &'a str) -> impl egui::Widget
 }
 
 fn main() {
+    SimpleLogger::new().with_utc_timestamps().with_utc_timestamps().with_colors(true).init().unwrap();
+	::log::set_max_level(LevelFilter::Info);
+    
     let mut options = eframe::NativeOptions::default();
     options.initial_window_size = Some(egui::Vec2::new(990.0,610.0));
     eframe::run_native(
@@ -100,6 +105,7 @@ impl eframe::App for HeroinnApp {
             }
 
             self.ui(ctx , ui);
+            ctx.request_repaint();
         });
     }
 }
@@ -323,7 +329,7 @@ impl HeroinnApp {
                     ui.heading("OS");
                 });
                 header.col(|ui| {
-                    ui.heading("Traffic Rate");
+                    ui.heading("Protocol");
                 });
                 header.col(|ui| {
                     ui.heading("Location");
@@ -346,7 +352,7 @@ impl HeroinnApp {
                     }
                 };
 
-                for _ in 0..20 {
+                for info in all_host() {
                     let row_height = 30.0;
                     body.row(row_height, |mut row| {
 
@@ -357,22 +363,23 @@ impl HeroinnApp {
                         }).context_menu(menu);
 
                         row.col(|ui| {
-                            ui.label("228.38.122.31");
+                            ui.label(info.info.ip);
                         }).context_menu(menu);
                         row.col(|ui| {
-                            ui.label("D3CSS6T4K51D7KK");
+                            ui.label(info.info.host_name);
                         }).context_menu(menu);
                         row.col(|ui| {
-                            ui.label("Windows 11 Build 22622");
+                            ui.label(info.info.os);
                         }).context_menu(menu);
                         row.col(|ui| {
-                            ui.label("11 Kb/s");
+                            ui.label(format!("{:?}", info.proto));
                         }).context_menu(menu);
                         row.col(|ui| {
                             ui.label("CHINA UNICOM");
                         }).context_menu(menu);
                         row.col(|ui| {
-                            ui.label("10s");
+                            let secs = cur_timestamp_secs() - info.last_heartbeat;
+                            ui.label(format!("{}" , secs));
                         }).context_menu(menu);
                         row.col(|ui| {
                             ui.label("Test host");
