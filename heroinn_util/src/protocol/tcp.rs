@@ -38,7 +38,7 @@ impl Server<TcpStream> for TcpServer{
         cbcb : CBCB,
     ) -> std::io::Result<Self> where Self: Sized{
         let local_addr : SocketAddr = address.parse().unwrap();
-        let server = TcpListener::bind(local_addr.clone())?;
+        let server = TcpListener::bind(local_addr)?;
         server.set_nonblocking(true)?;
 
         let connections = Arc::new(Mutex::new(HashMap::new()));
@@ -60,7 +60,7 @@ impl Server<TcpStream> for TcpServer{
 
                         let peer_addr = s.peer_addr().unwrap();
                         let mut s_1 = s.try_clone().unwrap();
-                        connections_1.lock().unwrap().insert(peer_addr.clone(), s);
+                        connections_1.lock().unwrap().insert(peer_addr, s);
 
                         let connections_2 = connections_1.clone();
                         
@@ -119,7 +119,7 @@ impl Server<TcpStream> for TcpServer{
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        Ok(self.local_addr.clone())
+        Ok(self.local_addr)
     }
 
     fn sendto(&mut self , peer_addr : SocketAddr , buf : &[u8]) -> std::io::Result<()> {

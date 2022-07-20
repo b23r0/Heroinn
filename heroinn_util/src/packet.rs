@@ -58,7 +58,7 @@ impl Message{
 
         let base = BasePacket{
             clientid : clientid.clone(),
-            data: data,
+            data,
         };
 
         let data = serde_json::to_string(&base)?;
@@ -77,7 +77,7 @@ impl Message{
     }
 
     pub fn peer_addr(&self) -> SocketAddr {
-        self.peer_addr.clone()
+        self.peer_addr
     }
 
     pub fn clientid(&self) -> String{

@@ -37,11 +37,11 @@ pub fn cb_msg(msg : Message){
     match HeroinnClientMsgID::from(msg.id()){
         HeroinnClientMsgID::HostInfo => {
             log::info!("hostinfo : {}" , msg.clientid());
-            if hosts.contains_key(&msg.clientid()){
+            if let std::collections::hash_map::Entry::Vacant(e) = hosts.entry(msg.clientid()) {
+                e.insert(UIHostInfo{clientid : msg.clientid() , peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() });
+            } else {
                 let v = hosts.get_mut(&msg.clientid()).unwrap();
                 *v = UIHostInfo{ clientid : msg.clientid() , peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() };
-            } else {
-                hosts.insert(msg.clientid() ,UIHostInfo{clientid : msg.clientid() , peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() } );
             }
         },
         HeroinnClientMsgID::Heartbeat => {

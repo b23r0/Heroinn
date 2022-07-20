@@ -38,8 +38,8 @@ impl HeroinnServer{
         match protocol{
             HeroinnProtocol::TCP => {
                 match TcpServer::new(format!("0.0.0.0:{}" , port).as_str() , HeroinnServer::cb_connection , cb_msg){
-                    Ok(tcp_server) => return Ok(Self{tcp_server: Some(tcp_server) , protocol}),
-                    Err(e) => return Err(e),
+                    Ok(tcp_server) => Ok(Self{tcp_server: Some(tcp_server) , protocol}),
+                    Err(e) => Err(e),
                 }
             },
         }

@@ -32,7 +32,7 @@ impl std::fmt::Debug for HeroinnPlatform{
 
 fn doc_link_label<'a>(title: &'a str, search_term: &'a str) -> impl egui::Widget + 'a {
     let label = format!("{}:", title);
-    let url = format!("");
+    let url = String::new();
     move |ui: &mut egui::Ui| {
         ui.hyperlink_to(label, url).on_hover_ui(|ui| {
             ui.horizontal_wrapped(|ui| {
