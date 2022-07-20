@@ -1,11 +1,12 @@
 use std::{io::*, collections::HashMap, sync::{Mutex, atomic::{AtomicU8, Ordering}}, net::SocketAddr};
 
 use heroinn_core::HeroinnServer;
+use heroinn_util::{packet::*, *};
 use lazy_static::*;
-use heroinn_util::{packet::{HostInfo, Message}, HeroinnProtocol, HeroinnClientMsgID, cur_timestamp_secs};
 
 #[derive(Clone)]
 pub struct UIHostInfo{
+    pub clientid : String,
     pub peer_addr : SocketAddr,
     pub proto : HeroinnProtocol,
     pub up_trans_rate : u64,
@@ -38,9 +39,9 @@ pub fn cb_msg(msg : Message){
             log::info!("hostinfo : {}" , msg.clientid());
             if hosts.contains_key(&msg.clientid()){
                 let v = hosts.get_mut(&msg.clientid()).unwrap();
-                *v = UIHostInfo{ peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() };
+                *v = UIHostInfo{ clientid : msg.clientid() , peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() };
             } else {
-                hosts.insert(msg.clientid() ,UIHostInfo{peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() } );
+                hosts.insert(msg.clientid() ,UIHostInfo{clientid : msg.clientid() , peer_addr : msg.peer_addr(), proto : msg.proto() , up_trans_rate: 0, down_trans_rate: 0, last_heartbeat: cur_timestamp_secs(), info: msg.parser().unwrap() } );
             }
         },
         HeroinnClientMsgID::Heartbeat => {
@@ -101,4 +102,12 @@ pub fn all_host() -> Vec<UIHostInfo>{
     }
 
     ret
+}
+
+pub fn remove_host(clientid : String){
+    let mut host = G_ONLINE_HOSTS.lock().unwrap();
+
+    if host.contains_key(&clientid){
+        host.remove(&clientid);
+    }
 }

@@ -313,7 +313,7 @@ impl HeroinnApp {
             .column(Size::initial(100.0).at_least(40.0))
             .column(Size::initial(100.0).at_least(40.0))
             .column(Size::initial(150.0).at_least(40.0))
-            .column(Size::initial(110.0).at_least(40.0))
+            .column(Size::initial(130.0).at_least(40.0))
             .resizable(self.resizable)
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -379,6 +379,9 @@ impl HeroinnApp {
                         }).context_menu(menu);
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
+                            if secs > 30 {
+                                remove_host(info.clientid);
+                            }
                             ui.label(format!("{}" , secs));
                         }).context_menu(menu);
                         row.col(|ui| {

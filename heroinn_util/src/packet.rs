@@ -24,8 +24,8 @@ pub struct Heartbeat{
 
 pub struct Message{
     id : u8,
-    pub peer_addr : SocketAddr,
-    pub proto : HeroinnProtocol,
+    peer_addr : SocketAddr,
+    proto : HeroinnProtocol,
     clientid : String,
     data : String
 }

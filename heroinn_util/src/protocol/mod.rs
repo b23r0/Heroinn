@@ -1,6 +1,6 @@
 
 pub mod tcp;
-use std::{io::*, any::Any, net::SocketAddr};
+use std::{io::*, net::SocketAddr};
 
 use crate::{HeroinnProtocol, packet::Message};
 
@@ -10,11 +10,13 @@ pub trait Client<T>{
     fn recv(&mut self) -> Result<Vec<u8>>;
     fn send(&mut self,buf : &mut [u8]) -> Result<()>;
     fn close(&mut self);
-    fn as_any(&self) -> &dyn Any;
 }
 
 pub trait Server<T> {
-    fn new<CBCB: 'static + Fn(Message) + Send + Copy , CB: 'static + Fn(HeroinnProtocol , Vec<u8>, SocketAddr, CBCB) + Send>(
+    fn new<
+        CBCB: 'static + Fn(Message) + Send + Copy , 
+        CB: 'static + Fn(HeroinnProtocol , Vec<u8>, SocketAddr, CBCB) + Send
+    >(
         address : &str , 
         cb_data : CB,
         cbcb : CBCB,

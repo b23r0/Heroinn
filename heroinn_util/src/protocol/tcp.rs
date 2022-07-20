@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpStream, TcpListener, SocketAddr};
@@ -30,7 +29,10 @@ impl Clone for TcpConnection{
 }
 
 impl Server<TcpStream> for TcpServer{
-    fn new<CBCB: 'static + Fn(Message) + Send + Copy , CB: 'static + Fn(HeroinnProtocol , Vec<u8>, SocketAddr, CBCB) + Send>(
+    fn new<
+        CBCB: 'static + Fn(Message) + Send + Copy , 
+        CB: 'static + Fn(HeroinnProtocol , Vec<u8>, SocketAddr, CBCB) + Send
+    >(
         address : &str , 
         cb_data : CB,
         cbcb : CBCB,
@@ -72,6 +74,7 @@ impl Server<TcpStream> for TcpServer{
                                 };
                                 let size = u32::from_be_bytes(size_buf);
                                 if size > TCP_MAX_PACKET{
+                                    log::error!("packet length error!");
                                     break;
                                 }
                         
@@ -181,9 +184,6 @@ impl Client<TcpStream> for TcpConnection{
             Err(_) => {},
         };
     }
-    fn as_any(&self) -> &dyn Any {
-        self
-      }
 }
 
 impl Drop for TcpServer{
