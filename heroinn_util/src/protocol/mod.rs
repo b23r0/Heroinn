@@ -9,6 +9,7 @@ pub trait Client<T>{
     fn from(s : T) -> Result<Self> where Self: Sized;
     fn recv(&mut self) -> Result<Vec<u8>>;
     fn send(&mut self,buf : &mut [u8]) -> Result<()>;
+    fn local_addr(&self) -> Result<SocketAddr>;
     fn close(&mut self);
 }
 
@@ -24,7 +25,9 @@ pub trait Server<T> {
 
     fn local_addr(&self) -> Result<SocketAddr>;
 
-    fn sendto(&mut self , peer_addr : SocketAddr , buf : &[u8]) -> Result<()>;
+    fn sendto(&mut self , peer_addr : &SocketAddr , buf : &[u8]) -> Result<()>;
+
+    fn contains_addr(&mut self , peer_addr : &SocketAddr) -> bool;
 
     fn close(&mut self);
 }

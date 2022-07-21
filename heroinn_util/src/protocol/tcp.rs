@@ -122,14 +122,26 @@ impl Server<TcpStream> for TcpServer{
         Ok(self.local_addr)
     }
 
-    fn sendto(&mut self , peer_addr : SocketAddr , buf : &[u8]) -> std::io::Result<()> {
-        match self.connections.lock().unwrap().get(&peer_addr){
+    fn sendto(&mut self , peer_addr : &SocketAddr , buf : &[u8]) -> std::io::Result<()> {
+        match self.connections.lock().unwrap().get(peer_addr){
             Some(mut k) => {
+                let size = buf.len() as u32;
+
+                if size > TCP_MAX_PACKET{
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("packet size error : {}", size)));
+                }
+        
+                let size = size.to_be_bytes();
+                k.write_all(&size)?;
                 k.write_all(buf)?;
                 Ok(())
             },
             None => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found client")),
         }
+    }
+
+    fn contains_addr(&mut self , peer_addr : &SocketAddr) -> bool{
+        self.connections.lock().unwrap().contains_key(peer_addr)
     }
 }
 
@@ -183,6 +195,10 @@ impl Client<TcpStream> for TcpConnection{
             Ok(_) => {},
             Err(_) => {},
         };
+    }
+
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.s.local_addr()
     }
 }
 

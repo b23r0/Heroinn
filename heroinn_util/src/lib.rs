@@ -1,10 +1,14 @@
 pub mod protocol;
 pub mod packet;
+pub mod session;
+
+pub const HEART_BEAT_TIME : u64 = 5;
 
 #[derive(Debug,PartialEq)]
 pub enum HeroinnClientMsgID{
     HostInfo,
     Heartbeat,
+    SessionPacket,
     Unknow
 }
 
@@ -13,7 +17,9 @@ impl HeroinnClientMsgID{
         match self{
             HeroinnClientMsgID::HostInfo => 0x00,
             HeroinnClientMsgID::Heartbeat => 0x01,
-            HeroinnClientMsgID::Unknow => 0xff 
+            HeroinnClientMsgID::SessionPacket => 0x02, 
+            HeroinnClientMsgID::Unknow => 0xff,
+            
         }
     }
 
@@ -21,6 +27,7 @@ impl HeroinnClientMsgID{
         match v{
             0x00 => HeroinnClientMsgID::HostInfo,
             0x01 => HeroinnClientMsgID::Heartbeat,
+            0x02 => HeroinnClientMsgID::SessionPacket,
             _ => HeroinnClientMsgID::Unknow
         }
     }
@@ -30,6 +37,7 @@ impl HeroinnClientMsgID{
 pub enum HeroinnServerCommandID{
     Shell,
     File,
+    SessionPacket,
     Unknow
 }
 
@@ -38,7 +46,8 @@ impl HeroinnServerCommandID{
         match self{
             HeroinnServerCommandID::Shell => 0x00,
             HeroinnServerCommandID::File => 0x01,
-            HeroinnServerCommandID::Unknow => 0xff 
+            HeroinnServerCommandID::SessionPacket => 0x02, 
+            HeroinnServerCommandID::Unknow => 0xff,
         }
     }
 
@@ -46,6 +55,7 @@ impl HeroinnServerCommandID{
         match v{
             0x00 => HeroinnServerCommandID::Shell,
             0x01 => HeroinnServerCommandID::File,
+            0x02 => HeroinnServerCommandID::SessionPacket,
             _ => HeroinnServerCommandID::Unknow
         }
     }

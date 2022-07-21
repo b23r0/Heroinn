@@ -1,7 +1,7 @@
 use std::{io::*, net::SocketAddr};
 use serde::{Serialize, Deserialize};
 
-use crate::HeroinnProtocol;
+use crate::{HeroinnProtocol, session::SessionPacket};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct BasePacket{
@@ -19,7 +19,9 @@ pub struct HostInfo{
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Heartbeat{
-    pub time : u64
+    pub time : u64,
+    pub in_rate : u64,
+    pub out_rate : u64 
 }
 
 pub struct Message{
@@ -27,7 +29,8 @@ pub struct Message{
     peer_addr : SocketAddr,
     proto : HeroinnProtocol,
     clientid : String,
-    data : String
+    data : String,
+    data_length : usize 
 }
 
 impl Message{
@@ -47,10 +50,11 @@ impl Message{
             proto,
             clientid: base.clientid,
             data: base.data,
+            data_length : buf.len()
         })
     }
 
-    pub fn make<T : Serialize>(id : u8 , clientid: &String , data : T) -> Result<Vec<u8>>{
+    pub fn build<T : Serialize>(id : u8 , clientid: &String , data : T) -> Result<Vec<u8>>{
         let mut ret = vec![];
         ret.push(id);
 
@@ -62,7 +66,7 @@ impl Message{
         };
 
         let data = serde_json::to_string(&base)?;
-
+        log::debug!("build packet : {}" , data);
         ret.append(&mut data.as_bytes().to_vec());
 
         Ok(ret)
@@ -84,8 +88,22 @@ impl Message{
         self.clientid.clone()
     }
 
-    pub fn parser(&self) -> Result<HostInfo>{
+    pub fn parser_hostinfo(&self) -> Result<HostInfo>{
         let packet : HostInfo = serde_json::from_str(&self.data)?;
         Ok(packet)
+    }
+
+    pub fn parser_heartbeat(&self) -> Result<Heartbeat>{
+        let packet : Heartbeat = serde_json::from_str(&self.data)?;
+        Ok(packet)
+    }
+
+    pub fn parser_sessionpacket(&self) -> Result<SessionPacket>{
+        let packet : SessionPacket = serde_json::from_str(&self.data)?;
+        Ok(packet)
+    }
+
+    pub fn length(&self) -> usize{
+        self.data_length
     }
 }

