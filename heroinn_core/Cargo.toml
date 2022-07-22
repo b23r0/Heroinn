@@ -9,3 +9,4 @@ edition = "2021"
 heroinn_util = {path = "../heroinn_util"}
 uuid = "1.1.2"
 log = "0.4.17"
+termport = {git = "https://github.com/b23r0/termport.git"}

@@ -22,8 +22,8 @@ pub struct SessionPacket{
 }
 
 pub trait Session{
-    fn new_client( sender : Sender<SessionBase> ,clientid : &String, id : &String) -> Self;
-    fn new( sender : Sender<SessionBase> , clientid : &String) -> Self;
+    fn new_client( sender : Sender<SessionBase> ,clientid : &String, id : &String) -> Result<Self> where Self: Sized;
+    fn new( sender : Sender<SessionBase> , clientid : &String) -> Result<Self> where Self: Sized;
     fn id(&self) -> String;
     fn write(&mut self, data : &Vec<u8>) -> Result<()>;
     fn alive(&self) -> bool;

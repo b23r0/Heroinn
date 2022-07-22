@@ -203,7 +203,7 @@ pub fn remove_host(clientid : String){
 pub fn open_shell(clientid : &String){
     
     let sender = G_SESSION_SENDER.lock().unwrap();
-    let session = ShellServer::new(sender.clone(), clientid);
+    let session = ShellServer::new(sender.clone(), clientid).unwrap();
     drop(sender);
 
     log::info!("create shell session : {}" , session.id());

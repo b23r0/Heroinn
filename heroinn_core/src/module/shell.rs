@@ -1,31 +1,57 @@
 use std::sync::{mpsc::Sender, atomic::AtomicBool, Arc};
 
 use heroinn_util::session::{Session, SessionPacket, SessionBase};
+use termport::*;
 
 pub struct ShellServer{
     id : String,
     clientid : String,
-    closed : Arc<AtomicBool>
+    closed : Arc<AtomicBool>,
+    term : TermInstance
 }
 
 impl Session for ShellServer{
 
-    fn new(sender : Sender<SessionBase> , clientid : &String) -> Self {
+    fn new(sender : Sender<SessionBase> , clientid : &String) -> std::io::Result<Self> {
         let closed = Arc::new(AtomicBool::new(false));
+
+        let term = match new_term(&"alacritty_driver.exe".to_string()){
+            Ok(p) => p,
+            Err(e) => {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+            },
+        };
+
+        let mut term_1 = term.clone();
+        let closed_2 = closed.clone();
+        std::thread::spawn(move || {
+            term_1.wait_for_exit().unwrap();
+            closed_2.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
 
         let id = uuid::Uuid::new_v4().to_string();
         let id_1 = id.clone();
         let closed_1 = closed.clone();
         let clientid_1 = clientid.clone();
+        let mut term_2 = term.clone();
         std::thread::spawn(move || {
             loop{
                 if closed_1.load(std::sync::atomic::Ordering::Relaxed){
                     break; 
                 }
 
+                let mut buf = [0u8;1024];
+                let size = match term_2.read(&mut buf){
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::error!("term instance read error : {}" , e);
+                        break;
+                    },
+                };
+
                 let packet = SessionPacket{
                     id: id_1.clone(),
-                    data: vec![1,2,3],
+                    data: buf[..size].to_vec(),
                 };
 
                 match sender.send(SessionBase{
@@ -39,13 +65,12 @@ impl Session for ShellServer{
                         break;
                     },
                 };
-                std::thread::sleep(std::time::Duration::from_secs(2));
             }
-            log::info!("TestSession worker closed");
+            log::info!("shell worker closed");
             closed_1.store(true, std::sync::atomic::Ordering::Relaxed);
         });
 
-        Self { id, closed , clientid : clientid.clone() }
+        Ok(Self { id, closed , clientid : clientid.clone() ,term : term.clone()})
     }
 
     fn id(&self) -> String {
@@ -53,12 +78,11 @@ impl Session for ShellServer{
     }
 
     fn write(&mut self,data : &Vec<u8>) -> std::io::Result<()> {
-        log::info!("testsession : {:?}" , data);
-        Ok(())
+        self.term.write(data)
     }
 
     fn close(&mut self) {
-        log::info!("testsession closed");
+        log::info!("shell closed");
         self.closed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -70,7 +94,7 @@ impl Session for ShellServer{
         self.clientid.clone()
     }
 
-    fn new_client( _sender : Sender<SessionBase> ,_clientid : &String, _id : &String) -> Self {
-        todo!()
+    fn new_client( _sender : Sender<SessionBase> ,_clientid : &String, _id : &String) -> std::io::Result<ShellServer> {
+        Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not client"))
     }
 }
