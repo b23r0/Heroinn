@@ -5,7 +5,7 @@ use windows::Win32::System::{Threading::{OpenProcess, WaitForSingleObject}};
 use std::io::*;
 
 #[cfg(target_os = "windows")]
-use super::conpty::{self, Process};
+use conpty::*;
 
 pub struct ShellClient{
     id : String,
@@ -55,7 +55,14 @@ impl Session for ShellClient{
 
         let closed_2 = closed.clone();
         std::thread::spawn(move || {
-            let handle = unsafe { OpenProcess(windows::Win32::System::Threading::PROCESS_ALL_ACCESS, false, pid) };
+            let handle = match unsafe { OpenProcess(windows::Win32::System::Threading::PROCESS_ALL_ACCESS, false, pid) }{
+                Ok(p) => p,
+                Err(e) => {
+                    log::info!("open shell process error : {}" ,e);
+                    closed_2.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return;
+                },
+            };
     
             if !handle.is_invalid() {
                 unsafe { WaitForSingleObject(handle, 0xffffffff)};
