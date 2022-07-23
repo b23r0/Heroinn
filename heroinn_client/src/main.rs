@@ -9,7 +9,7 @@ use lazy_static::*;
 
 mod module;
 
-use module::Shell::ShellClient;
+use module::shell::ShellClient;
 
 lazy_static!{
     static ref G_OUT_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
@@ -41,7 +41,7 @@ fn main() {
 
         let (session_sender , session_receiver) = channel::<SessionBase>();
 
-        let mut client = match TcpConnection::connect("127.0.0.1:8000"){
+        let mut client = match TcpConnection::connect("192.168.199.127:8000"){
             Ok(p) => p,
             Err(e) => {
                 log::info!("connect faild : {}" , e);

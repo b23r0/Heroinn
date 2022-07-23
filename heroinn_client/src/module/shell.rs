@@ -4,6 +4,7 @@ use heroinn_util::session::{SessionPacket, SessionBase, Session};
 use windows::Win32::System::{Threading::{OpenProcess, WaitForSingleObject}};
 use std::io::*;
 
+#[cfg(target_os = "windows")]
 use super::conpty::{self, Process};
 
 pub struct ShellClient{
@@ -14,6 +15,15 @@ pub struct ShellClient{
     process : Process,
     #[cfg(target_os = "windows")]
     writer : conpty::io::PipeWriter,
+    #[cfg(not(target_os = "windows"))]
+    writer : std::fs::File,
+    #[cfg(not(target_os = "windows"))]
+    master : i32,
+    #[cfg(not(target_os = "windows"))]
+    slave : i32,
+    #[cfg(not(target_os = "windows"))]
+    pid : i32,
+    sender : Sender<SessionBase>
     
 }
 
@@ -21,6 +31,11 @@ static MAGIC_FLAG : [u8;2] = [0x37, 0x37];
 
 pub fn makeword(a : u8, b : u8) -> u16{
     ((a as u16) << 8) | b as u16
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_termsize(fd : i32 , mut size : Box<libc::winsize>) -> bool {
+	(unsafe {libc::ioctl(fd , libc::TIOCSWINSZ , &mut *size) } as i32) > 0
 }
 
 impl Session for ShellClient{
@@ -67,6 +82,7 @@ impl Session for ShellClient{
         let closed_1 = closed.clone();
         let clientid_1 = clientid.clone();
 
+        let sender_1 = sender.clone();
         std::thread::spawn(move || {
             loop{
                 if closed_1.load(std::sync::atomic::Ordering::Relaxed){
@@ -86,7 +102,7 @@ impl Session for ShellClient{
                     data: buf[..size].to_vec(),
                 };
 
-                match sender.send(SessionBase{
+                match sender_1.send(SessionBase{
                     id: id_1.clone(),
                     clientid : clientid_1.clone(),
                     packet : packet
@@ -102,28 +118,81 @@ impl Session for ShellClient{
             closed_1.store(true, std::sync::atomic::Ordering::Relaxed);
         });
 
-        Ok(Self { id : id.clone(), clientid : clientid.clone() , closed , writer , process})
+        Ok(Self { id : id.clone(), clientid : clientid.clone() , closed , writer , process , sender})
     }
 
     #[cfg(target_os = "linux")]
     fn new_client( sender : Sender<SessionBase> ,clientid : &String, id : &String) -> Result<Self> {
+        use std::{process::{Command, Stdio}, os::unix::prelude::{FromRawFd, CommandExt}, fs::File};
+
+        use nix::{pty::openpty, unistd::ForkResult};
+        use nix::unistd::{fork};
+
         let closed = Arc::new(AtomicBool::new(false));
         
+        let ends = openpty(None, None)?;
+        let master = ends.master;
+        let slave = ends.slave;
+    
+        let mut builder = Command::new("bash");
+
+        let child_pid;
+        let closed_2 = closed.clone();
+        match unsafe { fork() } {
+            Ok(ForkResult::Parent { child: pid, .. }) => {
+                child_pid = pid.as_raw();
+                std::thread::spawn(move || {
+                    let mut status = 0;
+                    unsafe { libc::waitpid(i32::from(pid), &mut status ,0) };
+                    log::warn!("child process exit!");
+                    closed_2.store(true, std::sync::atomic::Ordering::Relaxed);
+                });
+    
+            }
+            Ok(ForkResult::Child) => {
+                unsafe { ioctl_rs::ioctl(master, ioctl_rs::TIOCNOTTY) };
+                unsafe { libc::setsid() };
+                unsafe { ioctl_rs::ioctl(slave, ioctl_rs::TIOCSCTTY) };
+    
+                builder
+                .stdin(unsafe { Stdio::from_raw_fd(slave) })
+                .stdout(unsafe { Stdio::from_raw_fd(slave) })
+                .stderr(unsafe { Stdio::from_raw_fd(slave) })
+                .exec();
+                std::process::exit(0);
+            },
+            Err(e) => {
+                log::error!("shell fork error : {}" ,e);
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
+            }
+        }
+
+        let ptyin = unsafe { File::from_raw_fd(master) };
+        let mut ptyout = unsafe { File::from_raw_fd(master) };
+
         let id_1 = id.clone();
         let closed_1 = closed.clone();
         let clientid_1 = clientid.clone();
+        let sender_1 = sender.clone();
         std::thread::spawn(move || {
             loop{
                 if closed_1.load(std::sync::atomic::Ordering::Relaxed){
                     break; 
                 }
 
-                let packet = SessionPacket{
-                    id: id_1.clone(),
-                    data: vec![4,5,6],
+                let mut buf = [0u8;1024];
+
+                let size = match ptyout.read(&mut buf){
+                    Ok(p) => p,
+                    Err(_) => break,
                 };
 
-                match sender.send(SessionBase{
+                let packet = SessionPacket{
+                    id: id_1.clone(),
+                    data: buf[..size].to_vec(),
+                };
+
+                match sender_1.send(SessionBase{
                     id: id_1.clone(),
                     clientid : clientid_1.clone(),
                     packet : packet
@@ -134,13 +203,12 @@ impl Session for ShellClient{
                         break;
                     },
                 };
-                std::thread::sleep(std::time::Duration::from_secs(2));
             }
-            log::info!("TestSession worker closed");
+            log::info!("shell worker closed");
             closed_1.store(true, std::sync::atomic::Ordering::Relaxed);
         });
 
-        Ok(Self { id : id.clone(), clientid : clientid.clone() , closed})
+        Ok(Self { id : id.clone(), clientid : clientid.clone() , closed , sender , writer : ptyin , master , slave , pid : child_pid})
     }
 
     fn id(&self) -> String {
@@ -148,20 +216,75 @@ impl Session for ShellClient{
     }
 
     fn write(&mut self,data : &Vec<u8>) -> std::io::Result<()> {
+
+        if data.len()== 3 && self.alive(){
+            if data == &vec![MAGIC_FLAG[0], MAGIC_FLAG[1] , 0xff]{
+                log::info!("client closed");
+                self.close();
+                return Ok(());
+            }
+        }
+
         if data.len() == 6 && data[0] == MAGIC_FLAG[0] && data[1] == MAGIC_FLAG[1] {
 
             let row = makeword(data[2] , data[3]);
             let col = makeword(data[4] , data[5]);
 
+            #[cfg(target_os = "windows")]
             self.process.resize(col as i16 , row as i16).unwrap();
+
+            #[cfg(not(target_os = "windows"))]
+            let size = Box::new(libc::winsize{
+                ws_row : row, 
+                ws_col :  col ,
+                ws_xpixel : 0,
+                ws_ypixel: 0, 
+                
+            });
+            #[cfg(not(target_os = "windows"))]
+            set_termsize(self.slave, size);
             return Ok(());
         }
 
-        self.writer.write_all(data)
+        #[cfg(target_os = "windows")]
+        self.writer.write_all(data)?;
+
+        #[cfg(not(target_os = "windows"))]
+        self.writer.write_all(data)?;
+
+        Ok(())
+
     }
 
     fn close(&mut self) {
         log::info!("shell closed");
+
+        let packet = SessionPacket{
+            id: self.id.clone(),
+            data: vec![MAGIC_FLAG[0], MAGIC_FLAG[1] , 0xff],
+        };
+
+        match self.sender.send(SessionBase{
+            id: self.id.clone(),
+            clientid : self.clientid.clone(),
+            packet : packet
+        }){
+            Ok(_) => {},
+            Err(_) => {},
+        };
+
+        #[cfg(not(target_os = "windows"))]
+        unsafe { libc::kill(9 ,self.pid)};
+        #[cfg(not(target_os = "windows"))]
+        unsafe { libc::close(self.slave)};
+        #[cfg(not(target_os = "windows"))]
+        unsafe { libc::close(self.master)};
+
+        #[cfg(target_os = "windows")]
+        match self.process.exit(0){
+            Ok(_) => {},
+            Err(_) => {},
+        };
         self.closed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -173,7 +296,7 @@ impl Session for ShellClient{
         self.clientid.clone()
     }
 
-    fn new(_sender : Sender<SessionBase> , _id : &String) -> Result<Self>  {
+    fn new(_sender : Sender<SessionBase> , _id : &String , _ : &String) -> Result<Self>  {
         Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not server"))
     }
 }

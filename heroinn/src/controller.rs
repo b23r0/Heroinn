@@ -200,18 +200,28 @@ pub fn remove_host(clientid : String){
     }
 }
 
+pub fn get_hostinfo_by_clientid(clientid: &String) -> Option<UIHostInfo>{
+    let hosts = G_ONLINE_HOSTS.lock().unwrap();
+    if hosts.contains_key(clientid){
+        return Some(hosts[clientid].clone());
+    }
+    None
+}
+
 pub fn open_shell(clientid : &String){
     
-    let sender = G_SESSION_SENDER.lock().unwrap();
-    let session = ShellServer::new(sender.clone(), clientid).unwrap();
-    drop(sender);
-
-    log::info!("create shell session : {}" , session.id());
-
-    let data = SessionPacket{ id: session.id(), data: vec![] };
+    if let Some(info) = get_hostinfo_by_clientid(clientid){
+        let sender = G_SESSION_SENDER.lock().unwrap();
+        let session = ShellServer::new(sender.clone(), clientid , &format!("{}", info.peer_addr)).unwrap();
+        drop(sender);
     
-    G_SHELL_SESSION.lock().unwrap().register(session);
-
-    let data = Message::build(HeroinnServerCommandID::Shell.to_u8(), clientid, data).unwrap();
-    send_data_by_clientid(clientid , &data).unwrap();
+        log::info!("create shell session : {}" , session.id());
+    
+        let data = SessionPacket{ id: session.id(), data: vec![] };
+        
+        G_SHELL_SESSION.lock().unwrap().register(session);
+    
+        let data = Message::build(HeroinnServerCommandID::Shell.to_u8(), clientid, data).unwrap();
+        send_data_by_clientid(clientid , &data).unwrap();
+    }
 }

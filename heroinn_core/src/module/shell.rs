@@ -7,15 +7,18 @@ pub struct ShellServer{
     id : String,
     clientid : String,
     closed : Arc<AtomicBool>,
-    term : TermInstance
+    term : TermInstance,
+    sender : Sender<SessionBase>
 }
+
+static MAGIC_FLAG : [u8;2] = [0x37, 0x37];
 
 impl Session for ShellServer{
 
-    fn new(sender : Sender<SessionBase> , clientid : &String) -> std::io::Result<Self> {
+    fn new(sender : Sender<SessionBase> , clientid : &String , peer_addr : &String) -> std::io::Result<Self> {
         let closed = Arc::new(AtomicBool::new(false));
 
-        let term = match new_term(&"alacritty_driver.exe".to_string()){
+        let term = match new_term(&"alacritty_driver.exe".to_string() , peer_addr){
             Ok(p) => p,
             Err(e) => {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
@@ -34,6 +37,7 @@ impl Session for ShellServer{
         let closed_1 = closed.clone();
         let clientid_1 = clientid.clone();
         let mut term_2 = term.clone();
+        let sender_1 = sender.clone();
         std::thread::spawn(move || {
             loop{
                 if closed_1.load(std::sync::atomic::Ordering::Relaxed){
@@ -54,7 +58,7 @@ impl Session for ShellServer{
                     data: buf[..size].to_vec(),
                 };
 
-                match sender.send(SessionBase{
+                match sender_1.send(SessionBase{
                     id: id_1.clone(),
                     clientid : clientid_1.clone(),
                     packet : packet
@@ -70,7 +74,7 @@ impl Session for ShellServer{
             closed_1.store(true, std::sync::atomic::Ordering::Relaxed);
         });
 
-        Ok(Self { id, closed , clientid : clientid.clone() ,term : term.clone()})
+        Ok(Self { id, closed , clientid : clientid.clone() ,term : term.clone() , sender})
     }
 
     fn id(&self) -> String {
@@ -78,11 +82,36 @@ impl Session for ShellServer{
     }
 
     fn write(&mut self,data : &Vec<u8>) -> std::io::Result<()> {
+
+        if data.len()== 3 && self.alive(){
+            if data == &vec![MAGIC_FLAG[0], MAGIC_FLAG[1] , 0xff]{
+                log::info!("client closed");
+                self.close();
+                return Ok(());
+            }
+        }
+
         self.term.write(data)
     }
 
     fn close(&mut self) {
         log::info!("shell closed");
+
+        let packet = SessionPacket{
+            id: self.id.clone(),
+            data: vec![MAGIC_FLAG[0], MAGIC_FLAG[1] , 0xff],
+        };
+
+        match self.sender.send(SessionBase{
+            id: self.id.clone(),
+            clientid : self.clientid.clone(),
+            packet : packet
+        }){
+            Ok(_) => {},
+            Err(_) => {},
+        };
+
+        self.term.close().unwrap();
         self.closed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
