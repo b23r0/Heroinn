@@ -147,38 +147,59 @@ impl HeroinnApp {
                     });
             }
             SwitchDock::Listener => {
-
-                ui.horizontal(|ui| {
-                    ui.label("Protocol : ");
-                    egui::ComboBox::from_label("")
-                    .selected_text(format!("{:?}", self.combox_listen_protocol))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, "TCP");
-                    });
-                    ui.label("Port : ");
-                    ui.add(egui::TextEdit::singleline(&mut self.text_listen_port).hint_text("9001"));
-                    if ui.button("Add").clicked(){
-                        match self.text_listen_port.parse::<u16>(){
-                            Ok(port) => {
-                                match add_listener(&self.combox_listen_protocol, port){
-                                    Ok(_) => {},
-                                    Err(e) => {
-                                        msg::error(&"Listener".to_string(), &format!("{}" , e));
-                                    },
-                                };
-                            },
-                            Err(e) => {
-                                msg::error(&"Listener".to_string(), &format!("{}" , e));
-                            },
-                        };
-                    };
-                });
-
-                ui.separator();
                 StripBuilder::new(ui)
+                    .size(Size::exact(20.0))
+                    .size(Size::exact(5.0))
                     .size(Size::remainder())
                     .size(Size::exact(15.0))
                     .vertical(|mut strip| {
+                        strip.strip(|builder| {
+                            builder
+                            .size(Size::exact(70.0))
+                            .size(Size::exact(120.0))
+                            .size(Size::exact(50.0))
+                            .size(Size::remainder())
+                            .size(Size::exact(100.0))
+                            .horizontal(|mut strip|{
+                                strip.cell(|ui|{
+                                    ui.label("Protocol : ");
+                                });
+                                strip.cell(|ui|{
+                                    egui::ComboBox::from_label("")
+                                    .selected_text(format!("{:?}", self.combox_listen_protocol))
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, "TCP");
+                                    });
+                                });
+                                strip.cell(|ui|{
+                                    ui.label("Port : ");
+                                });
+                                strip.cell(|ui|{
+                                    ui.add(egui::TextEdit::singleline(&mut self.text_listen_port).hint_text("9001"));
+                                });
+                                strip.cell(|ui|{
+                                    if ui.button("Add a Listener").clicked(){
+                                        match self.text_listen_port.parse::<u16>(){
+                                            Ok(port) => {
+                                                match add_listener(&self.combox_listen_protocol, port){
+                                                    Ok(_) => {},
+                                                    Err(e) => {
+                                                        msg::error(&"Listener".to_string(), &format!("{}" , e));
+                                                    },
+                                                };
+                                            },
+                                            Err(e) => {
+                                                msg::error(&"Listener".to_string(), &format!("{}" , e));
+                                            },
+                                        };
+                                    };
+                                });
+                            });
+
+                        });
+                        strip.cell(|ui|{
+                            ui.separator();
+                        });
                         strip.cell(|ui| {
                             self.listen_table(ctx , ui);
                         });
@@ -421,7 +442,7 @@ impl HeroinnApp {
                             if secs > 30 {
                                 remove_host(info.clientid);
                             }
-                            ui.label(format!("{}" , secs));
+                            ui.label(format!("{} s" , secs));
                         }).context_menu(menu);
                         row.col(|ui| {
                             ui.label(info.info.remark);

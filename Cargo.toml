@@ -4,4 +4,5 @@ members = [
     "heroinn_client",
     "heroinn_core",
 	"heroinn_util",
+	"th3rd/heroinn_ftp"
 ]
