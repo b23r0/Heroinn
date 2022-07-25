@@ -1,4 +1,5 @@
 use controller::*;
+//use dlg::file::FileDlg;
 use eframe::egui::{self};
 use egui_extras::{Size, StripBuilder , TableBuilder};
 use heroinn_util::*;
@@ -6,6 +7,7 @@ use log::LevelFilter;
 use simple_logger::SimpleLogger;
 
 mod controller;
+mod msg;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,7 +94,7 @@ impl Default for HeroinnApp {
                 include_bytes!("res/listen.ico"),
             ).unwrap()
         } 
-}
+    }
 }
 
 impl eframe::App for HeroinnApp {
@@ -156,7 +158,19 @@ impl HeroinnApp {
                     ui.label("Port : ");
                     ui.add(egui::TextEdit::singleline(&mut self.text_listen_port).hint_text("9001"));
                     if ui.button("Add").clicked(){
-                        add_listener(&self.combox_listen_protocol, self.text_listen_port.parse::<u16>().unwrap()).unwrap();
+                        match self.text_listen_port.parse::<u16>(){
+                            Ok(port) => {
+                                match add_listener(&self.combox_listen_protocol, port){
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        msg::error(&"Listener".to_string(), &format!("{}" , e));
+                                    },
+                                };
+                            },
+                            Err(e) => {
+                                msg::error(&"Listener".to_string(), &format!("{}" , e));
+                            },
+                        };
                     };
                 });
 
@@ -219,17 +233,6 @@ impl HeroinnApp {
                                 ui.end_row();
                             });
                             ui.separator();
-            
-                            //egui::Window::new("message")
-                            //.collapsible(false)
-                            //.resizable(false)
-                            //.show(ctx, |ui| {
-                            //    let str = format!("address : {} , port : {} , protocol : {:?} , platform : {:?}" , self.text_generator_address , self.text_generator_port , self.combox_generator_protocol , self.combox_generator_platform);
-                            //    ui.label(str);
-                            //});
-                            if ui.button("Generate Now").clicked(){
-
-                            };
                         });
 
                         strip.cell(|ui| {
@@ -294,7 +297,12 @@ impl HeroinnApp {
 
                         row.col(|ui| {
                             if ui.button("Remove").clicked(){
-                                remove_listener(listener.id);
+                                match remove_listener(listener.id){
+                                    Ok(_) => {},
+                                    Err(e) => {
+                                        msg::error(&"Listener".to_string(), &format!("{}" , e));
+                                    },
+                                };
                             };
                         });
                     });
@@ -357,7 +365,12 @@ impl HeroinnApp {
 
                     let menu = |ui : &mut egui::Ui| {
                         if ui.button("Shell").clicked() {
-                            open_shell(&clientid);
+                            match open_shell(&clientid){
+                                Ok(_) => {},
+                                Err(e) => {
+                                    msg::error(&"Shell".to_string(), &format!("{}" , e));
+                                },
+                            };
                             ui.close_menu();
                         }
                         if ui.button("File").clicked() {

