@@ -1,6 +1,7 @@
 pub mod protocol;
 pub mod packet;
 pub mod session;
+pub mod rpc;
 
 pub const HEART_BEAT_TIME : u64 = 5;
 
