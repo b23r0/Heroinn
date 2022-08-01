@@ -128,7 +128,7 @@ impl Session for ShellClient{
         Ok(Self { id : id.clone(), clientid : clientid.clone() , closed , writer , process , sender})
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(not(target_os = "windows"))]
     fn new_client( sender : Sender<SessionBase> ,clientid : &String, id : &String) -> Result<Self> {
         use std::{process::{Command, Stdio}, os::unix::prelude::{FromRawFd, CommandExt}, fs::File};
 
