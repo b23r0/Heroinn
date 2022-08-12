@@ -12,3 +12,5 @@ image = { version = "0.24", features = ["jpeg", "png", "ico"] }
 log = "0.4"
 simple_logger = "2.2.0"
 rfd = "0.9.1"
+heroinn_util = {path = "../../heroinn_util"}
+lazy_static = "1.4.0"

