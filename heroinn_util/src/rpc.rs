@@ -4,7 +4,7 @@ use std::{io::*, sync::{RwLock, Arc}};
 
 use serde::{Serialize, Deserialize};
 
-use crate::{cur_timestamp_secs, cur_timestamp_millis};
+use crate::{cur_timestamp_secs};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RpcMessage{
@@ -13,7 +13,7 @@ pub struct RpcMessage{
     retcode : i32,
     time : u64,
     msg : String,
-    data : Vec<String>
+    pub data : Vec<String>
 }
 
 impl RpcMessage{
@@ -127,7 +127,7 @@ impl RpcClient{
         Self{wait_response_list , is_closed}
     }
 
-    pub fn write(&mut self , msg : &RpcMessage){
+    pub fn write(&self , msg : &RpcMessage){
         if !self.wait_response_list.read().unwrap().contains_key(&msg.id){
 
             let mut v = msg.clone();
@@ -139,7 +139,14 @@ impl RpcClient{
 
     pub fn wait_msg(&self , id : &String , timeout_secs : u64) -> Result<RpcMessage>{
         let cur_time = cur_timestamp_secs();
-        while !self.wait_response_list.read().unwrap().contains_key(id){
+        loop{
+            {
+                let lock = self.wait_response_list.read().unwrap();
+                if lock.contains_key(id){
+                    break;
+                }
+            }
+
             std::thread::sleep(std::time::Duration::from_secs(1));
             if cur_timestamp_secs() - cur_time > timeout_secs{
                 return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));

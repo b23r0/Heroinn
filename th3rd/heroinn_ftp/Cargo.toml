@@ -11,6 +11,6 @@ egui_extras = {version = "0.18" , features = ["image"]}
 image = { version = "0.24", features = ["jpeg", "png", "ico"] }
 log = "0.4"
 simple_logger = "2.2.0"
-rfd = "0.9.1"
+rfd = "0.10.0"
 heroinn_util = {path = "../../heroinn_util"}
 lazy_static = "1.4.0"

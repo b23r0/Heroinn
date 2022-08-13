@@ -147,7 +147,10 @@ impl Server<TcpStream> for TcpServer{
 
 impl Client<TcpStream> for TcpConnection{
     fn connect(address : &str) -> std::io::Result<Self> where Self: Sized {
-        let address : std::net::SocketAddr = address.parse().unwrap();
+        let address : std::net::SocketAddr = match address.parse(){
+            Ok(p) => p,
+            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("address format error : {}", e))),
+        };
         let s = TcpStream::connect(address)?;
         Ok(Self{s})
     }

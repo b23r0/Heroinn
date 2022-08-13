@@ -14,4 +14,3 @@ heroinn_core = {path = "../heroinn_core"}
 lazy_static = "1.4.0"
 log = "0.4"
 simple_logger = "2.2.0"
-rfd = "0.9.1"

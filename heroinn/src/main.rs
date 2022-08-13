@@ -7,7 +7,6 @@ use log::LevelFilter;
 use simple_logger::SimpleLogger;
 
 mod controller;
-mod msg;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,12 +183,12 @@ impl HeroinnApp {
                                                 match add_listener(&self.combox_listen_protocol, port){
                                                     Ok(_) => {},
                                                     Err(e) => {
-                                                        msg::error(&"Listener".to_string(), &format!("{}" , e));
+                                                        msgbox::error(&"Listener".to_string(), &format!("{}" , e));
                                                     },
                                                 };
                                             },
                                             Err(e) => {
-                                                msg::error(&"Listener".to_string(), &format!("{}" , e));
+                                                msgbox::error(&"Listener".to_string(), &format!("{}" , e));
                                             },
                                         };
                                     };
@@ -321,7 +320,7 @@ impl HeroinnApp {
                                 match remove_listener(listener.id){
                                     Ok(_) => {},
                                     Err(e) => {
-                                        msg::error(&"Listener".to_string(), &format!("{}" , e));
+                                        msgbox::error(&"Listener".to_string(), &format!("{}" , e));
                                     },
                                 };
                             };
@@ -389,12 +388,18 @@ impl HeroinnApp {
                             match open_shell(&clientid){
                                 Ok(_) => {},
                                 Err(e) => {
-                                    msg::error(&"Shell".to_string(), &format!("{}" , e));
+                                    msgbox::error(&"Shell".to_string(), &format!("{}" , e));
                                 },
                             };
                             ui.close_menu();
                         }
                         if ui.button("File").clicked() {
+                            match open_ftp(&clientid){
+                                Ok(_) => {},
+                                Err(e) => {
+                                    msgbox::error(&"Shell".to_string(), &format!("{}" , e));
+                                },
+                            };
                             ui.close_menu();
                         }
                     };

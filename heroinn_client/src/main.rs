@@ -224,7 +224,11 @@ fn main() {
                         HeroinnServerCommandID::SessionPacket => {
                             let msg = Message::new(client.local_addr().unwrap() , HeroinnProtocol::TCP , &buf).unwrap();
                             let packet = msg.parser_sessionpacket().unwrap();
+
+                            log::info!("recv session packet [{}] [{}]" , packet.id , msg.length());
+
                             shell_session_mgr.lock().unwrap().write(&packet.id, &packet.data).unwrap();
+                            ftp_session_mgr.lock().unwrap().write(&packet.id, &packet.data).unwrap();
                         },
                         HeroinnServerCommandID::Unknow => {
                             

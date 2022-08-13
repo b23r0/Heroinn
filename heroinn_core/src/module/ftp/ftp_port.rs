@@ -41,10 +41,24 @@ impl FtpInstance{
     }
 
     pub fn write(&mut self , buf : &[u8]) -> Result<()>{
+        let size = buf.len() as u32;
+        let size = size.to_be_bytes();
+
+        self.socket.write_all(&size)?;
         self.socket.write_all(buf)
     }
-    pub fn read(&mut self , buf : &mut [u8]) -> Result<usize>{
-        self.socket.read(buf)
+    pub fn read(&mut self) -> Result<Vec<u8>>{
+        let mut size_buf = [0u8 ; 4];
+        
+        self.socket.read_exact(&mut size_buf)?;
+
+        let size = u32::from_be_bytes(size_buf);
+
+        let mut buf = vec![0u8 ; size as usize];
+
+        self.socket.read_exact(&mut buf)?;
+
+        Ok(buf)
     }
     pub fn wait_for_exit(&mut self) -> Result<ExitStatus>{
         self.cmd.lock().unwrap().wait()

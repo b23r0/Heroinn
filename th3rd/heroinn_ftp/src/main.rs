@@ -1,14 +1,17 @@
-use std::{sync::{Arc, mpsc::{channel, Sender}, RwLock}};
+use std::{sync::{Arc, mpsc::{channel, Sender}}};
 
 use eframe::{egui, App};
 use egui_extras::{Size, StripBuilder};
-use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::DiskInfo};
+use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::DiskInfo, msgbox};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 use lazy_static::*;
 
+mod controller;
+use controller::*;
+
 lazy_static!{
-    static ref G_RPCCLIENT : Arc<RwLock<RpcClient>> = Arc::new(RwLock::new(RpcClient::new()));
+    static ref G_RPCCLIENT : Arc<RpcClient> = Arc::new(RpcClient::new());
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -39,24 +42,26 @@ struct FtpApp{
     cur_path : String,
     remote_path : String,
     remote_disk_info : Vec<DiskInfo>,
-    sender : Sender<RpcMessage>
+    _sender : Sender<RpcMessage>
 }
 
 impl FtpApp{
-    pub fn new(sender : Sender<RpcMessage>) -> Self{
-        let msg = RpcMessage::build_call("get_disk_info" , vec![]);
-        sender.send(msg.clone()).unwrap();
-        if let Err(e) =  G_RPCCLIENT.read().unwrap().wait_msg(&msg.id, 10){
-            std::process::exit(0);
+    pub fn new(_sender : Sender<RpcMessage>) -> Self{
+        let remote_disk_info = match get_remote_disk_info(&_sender){
+            Ok(p) => p,
+            Err(e) => {
+                msgbox::error(&"heroinn ftp".to_string(),&format!("get disk info error : {}" , e));
+                std::process::exit(0);
+            },
         };
 
         Self{ 
             initilized : false,
             switch : SwitchDock::List,
-            cur_path : String::from("C:\\"),
-            remote_path : String::from("C:\\"),
-            remote_disk_info : vec![],
-            sender
+            cur_path : String::from("/"),
+            remote_path : String::from("/"),
+            remote_disk_info,
+            _sender
         }
     }
 }
@@ -177,7 +182,11 @@ impl FtpApp{
                     .size(Size::remainder())
                     .vertical(|mut strip|{
                         strip.cell(|ui|{
-                            self.file_table(id,ctx, ui, files);
+                            if typ == FSType::Remote{
+                                self.file_table(id,ctx, ui, files);
+                            } else {
+                                self.file_table(id,ctx, ui, files);
+                            }
                         });
                     });
                 });
@@ -185,7 +194,7 @@ impl FtpApp{
         });
     }
 
-    fn file_table(&mut self,id : &str ,_ : &egui::Context , ui: &mut egui::Ui , files : Vec<u32>) {
+    fn file_table(&mut self,id : &str ,_ : &egui::Context , ui: &mut egui::Ui , _files : Vec<u32>) {
         ui.push_id(id, |ui| {
             egui_extras::TableBuilder::new(ui)
             .striped(true)
@@ -342,15 +351,15 @@ impl FtpApp{
 
 fn main() {
     SimpleLogger::new().with_utc_timestamps().with_utc_timestamps().with_colors(true).init().unwrap();
-	::log::set_max_level(LevelFilter::Info);
+	::log::set_max_level(LevelFilter::Debug);
 
     let args : Vec<String> = std::env::args().collect();
 
-    if args.is_empty(){
+    if args.len() < 2{
         return;
     }
 
-    let mut s = TcpConnection::connect(&format!("127.0.0.1:{}" , args[0])).unwrap();
+    let mut s = TcpConnection::connect(&format!("127.0.0.1:{}" , args[1])).unwrap();
     let mut s2 = s.clone();
 
     std::thread::spawn(move || {
@@ -361,10 +370,9 @@ fn main() {
                     std::process::exit(0);
                 },
             };
-    
             let msg = RpcMessage::parse(&data).unwrap();
-    
-            G_RPCCLIENT.write().unwrap().write(&msg);
+            log::debug!("ftp recv msg from core : {}", msg.id);
+            G_RPCCLIENT.write(&msg);
         }
     });
 
@@ -372,7 +380,12 @@ fn main() {
 
     std::thread::spawn(move || {
         loop{
-            let msg = receiver.recv().unwrap();
+            let msg = match receiver.recv(){
+                Ok(p) => p,
+                Err(_) => {
+                    std::process::exit(0);
+                },
+            };
             s2.send(&mut msg.serialize().unwrap()).unwrap();
         }
     });
@@ -380,7 +393,7 @@ fn main() {
     let mut options = eframe::NativeOptions::default();
     options.initial_window_size = Some(egui::Vec2::new(1060.0,300.0));
     eframe::run_native(
-        "Heroinn",
+        "Heroinn FTP",
         options,
         Box::new(|_cc| Box::new(FtpApp::new(sender))),
     );

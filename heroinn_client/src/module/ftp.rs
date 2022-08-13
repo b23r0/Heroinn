@@ -18,8 +18,8 @@ fn get_disk_info(_ : Vec<String>) -> Result<Vec<String>>{
 
     let sys = sysinfo::System::new_all();
     for d in sys.disks(){
-        let name = d.name().to_str().unwrap().to_string();
-        let typ = format!("{:?}", d.file_system());
+        let name = d.mount_point().to_str().unwrap().to_string();
+        let typ = format!("{:?}", d.type_());
         let size = d.available_space();
 
         let info = DiskInfo{
@@ -30,7 +30,7 @@ fn get_disk_info(_ : Vec<String>) -> Result<Vec<String>>{
 
         ret.push(info.serialize()?);
     }
-    Ok(vec![])
+    Ok(ret)
 }
 
 impl Session for FtpClient{
@@ -51,7 +51,7 @@ impl Session for FtpClient{
     }
 
     fn id(&self) -> String {
-        todo!()
+        self.id.clone()
     }
 
     fn write(&mut self, data : &Vec<u8>) -> std::io::Result<()> {
@@ -61,6 +61,7 @@ impl Session for FtpClient{
             id: self.id.clone(),
             data: ret.serialize()?,
         };
+        log::debug!("call ret : {:?}" , ret);
         if let Err(e) = self.sender.send(SessionBase { id: self.id.clone(), clientid: self.clientid.clone() , packet }){
             log::error!("session sender error : {}", e );
             self.closed.store(true, std::sync::atomic::Ordering::Relaxed);

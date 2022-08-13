@@ -8,14 +8,14 @@ pub enum FTPId{
 }
 
 impl FTPId{
-    fn to_u8(&self) -> u8{
+    fn _to_u8(&self) -> u8{
         match self{
             FTPId::GetDirectory => 0x01,
             FTPId::Unknow => 0xff,
         }
     }
 
-    fn from(id : u8) -> Self{
+    fn _from(id : u8) -> Self{
         match id{
             0x01 => FTPId::GetDirectory,
             _ => FTPId::Unknow
@@ -37,7 +37,7 @@ pub struct FileInfo{
     last_modified : String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct DiskInfo{
     pub name : String,
     pub size : u64,
@@ -60,6 +60,6 @@ impl DiskInfo{
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 pub struct DirectoryInfo{
-    path : String,     
-    detail : Vec<FileInfo>
+    pub path : String,     
+    pub detail : Vec<FileInfo>
 }

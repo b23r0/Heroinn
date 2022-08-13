@@ -1,6 +1,6 @@
 use std::{io::*, collections::HashMap, sync::{Mutex, atomic::{AtomicU8, Ordering}, mpsc::{Sender, channel}}, net::SocketAddr, time::Duration};
 
-use heroinn_core::{HeroinnServer, module::shell::ShellServer};
+use heroinn_core::{HeroinnServer, module::{shell::ShellServer, ftp::FtpServer}};
 use heroinn_util::{packet::*, *, session::{SessionBase, Session, SessionPacket, SessionManager}};
 use lazy_static::*;
 
@@ -35,6 +35,7 @@ lazy_static!{
     static ref  G_LISTENERS : Mutex<HashMap<u8 , HeroinnServer>> = Mutex::new(HashMap::new());
     static ref  G_LISTENER_ID : AtomicU8 = AtomicU8::new(0);
     static ref  G_SHELL_SESSION : Mutex<SessionManager<ShellServer>> = Mutex::new(SessionManager::new());
+    static ref  G_FTP_SESSION : Mutex<SessionManager<FtpServer>> = Mutex::new(SessionManager::new());
     static ref  G_SESSION_SENDER : Mutex<Sender<SessionBase>> = Mutex::new({
         let (sender , receiver) = channel::<SessionBase>();
 
@@ -42,6 +43,9 @@ lazy_static!{
             loop{
                 std::thread::sleep(Duration::from_secs(HEART_BEAT_TIME));
                 let mut session = G_SHELL_SESSION.lock().unwrap();
+                session.gc();
+
+                let mut session = G_FTP_SESSION.lock().unwrap();
                 session.gc();
             }
         });
@@ -122,11 +126,20 @@ pub fn cb_msg(msg : Message){
 
 pub fn send_data_to_session(msg : Message){
     let packet = msg.parser_sessionpacket().unwrap();
+
+    // shell session
     let mut shell_session = G_SHELL_SESSION.lock().unwrap();
     if shell_session.contains(&packet.id){
         shell_session.write(&packet.id, &packet.data).unwrap();
     }
     drop(shell_session);
+
+    // ftp session
+    let mut ftp_session = G_FTP_SESSION.lock().unwrap();
+    if ftp_session.contains(&packet.id){
+        ftp_session.write(&packet.id, &packet.data).unwrap();
+    }
+    drop(ftp_session);
 }
 
 pub fn send_data_by_clientid(clientid : &String , buf : &[u8]) -> Result<()>{
@@ -200,6 +213,7 @@ pub fn remove_host(clientid : String){
 
     if host.contains_key(&clientid){
         close_session_by_clientid_in_lock!(G_SHELL_SESSION , clientid);
+        close_session_by_clientid_in_lock!(G_FTP_SESSION , clientid);
         host.remove(&clientid);
     }
 }
@@ -226,6 +240,28 @@ pub fn open_shell(clientid : &String) -> Result<()>{
         G_SHELL_SESSION.lock().unwrap().register(session);
     
         let data = Message::build(HeroinnServerCommandID::Shell.to_u8(), clientid, data)?;
+        send_data_by_clientid(clientid , &data)?;
+    } else {
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "client not found"));
+    }
+
+    Ok(())
+}
+
+pub fn open_ftp(clientid : &String) -> Result<()>{
+    
+    if let Some(info) = get_hostinfo_by_clientid(clientid){
+        let sender = G_SESSION_SENDER.lock().unwrap();
+        let session = FtpServer::new(sender.clone(), clientid , &format!("{}", info.peer_addr))?;
+        drop(sender);
+    
+        log::info!("create ftp session : {}" , session.id());
+    
+        let data = SessionPacket{ id: session.id(), data: vec![] };
+        
+        G_FTP_SESSION.lock().unwrap().register(session);
+    
+        let data = Message::build(HeroinnServerCommandID::File.to_u8(), clientid, data)?;
         send_data_by_clientid(clientid , &data)?;
     } else {
         return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "client not found"));
