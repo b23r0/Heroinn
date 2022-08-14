@@ -21,7 +21,7 @@ lazy_static!{
 fn main() {
 
     SimpleLogger::new().with_utc_timestamps().with_utc_timestamps().with_colors(true).init().unwrap();
-	::log::set_max_level(LevelFilter::Info);
+	::log::set_max_level(LevelFilter::Debug);
 
     let clientid = Uuid::new_v4().to_string();
 
@@ -133,6 +133,7 @@ fn main() {
                     Ok(p) => p,
                     Err(e) => {
                         log::info!("sender channel closed : {}" , e);
+                        client_1.close();
                         break;
                     },
                 };

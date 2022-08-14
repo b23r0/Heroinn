@@ -50,6 +50,8 @@ impl Session for FtpServer{
                     },
                 };
 
+                log::debug!("recv msg from ftp instance");
+
                 let packet = SessionPacket{
                     id: id_1.clone(),
                     data: buf,
@@ -85,6 +87,7 @@ impl Session for FtpServer{
     }
 
     fn write(&mut self, data : &Vec<u8>) -> std::io::Result<()> {
+        log::debug!("write msg from ftp client");
         self.instance.write(&data)
     }
 

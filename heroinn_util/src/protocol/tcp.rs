@@ -10,7 +10,7 @@ use crate::{ HeroinnProtocol};
 use super::Server;
 use super::Client;
 
-const TCP_MAX_PACKET: u32 = 1024*10;
+const TCP_MAX_PACKET: u32 = 1024*9999;
 
 pub struct TcpServer{
     local_addr : SocketAddr,

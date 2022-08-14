@@ -66,7 +66,6 @@ impl Message{
         };
 
         let data = serde_json::to_string(&base)?;
-        log::debug!("build packet : {}" , data);
         ret.append(&mut data.as_bytes().to_vec());
 
         Ok(ret)

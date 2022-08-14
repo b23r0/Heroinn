@@ -1,4 +1,5 @@
 use std::io::*;
+pub mod method;
 
 use serde::{Serialize, Deserialize};
 
@@ -29,22 +30,15 @@ pub struct FTPPacket{
     data : String
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct FileInfo{
-    name : String,
-    size : u64,
-    typ : String,
-    last_modified : String,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct DiskInfo{
+pub struct FileInfo{
     pub name : String,
     pub size : u64,
-    pub typ : String
+    pub typ : String,
+    pub last_modified : String,
 }
 
-impl DiskInfo{
+impl FileInfo{
     pub fn serialize(&self) -> Result<String>{
         match serde_json::to_string(&self){
             Ok(p) => Ok(p),
@@ -53,7 +47,7 @@ impl DiskInfo{
     }
 
     pub fn parse(data : &String) -> Result<Self>{
-        let ret : DiskInfo = serde_json::from_str(data)?;
+        let ret : FileInfo = serde_json::from_str(data)?;
         Ok(ret)
     }
 }

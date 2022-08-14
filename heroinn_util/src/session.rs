@@ -51,6 +51,7 @@ impl<T : Session> SessionManager<T>{
 
     pub fn write(&mut self , id : &String , data : &Vec<u8>) -> Result<()>{
         if self.sessions.contains_key(id) {
+            log::debug!("found session : {}" , id);
             let session = self.sessions.get_mut(id).unwrap();
             session.write(data)?;
         }

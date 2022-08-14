@@ -128,13 +128,10 @@ impl RpcClient{
     }
 
     pub fn write(&self , msg : &RpcMessage){
-        if !self.wait_response_list.read().unwrap().contains_key(&msg.id){
+        let mut v = msg.clone();
+        v.time = cur_timestamp_secs();
 
-            let mut v = msg.clone();
-            v.time = cur_timestamp_secs();
-
-            self.wait_response_list.write().unwrap().insert(msg.id.clone(), v);
-        }
+        self.wait_response_list.write().unwrap().insert(msg.id.clone(), v);
     }
 
     pub fn wait_msg(&self , id : &String , timeout_secs : u64) -> Result<RpcMessage>{
@@ -147,7 +144,7 @@ impl RpcClient{
                 }
             }
 
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            std::thread::sleep(std::time::Duration::from_millis(100));
             if cur_timestamp_secs() - cur_time > timeout_secs{
                 return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
             }

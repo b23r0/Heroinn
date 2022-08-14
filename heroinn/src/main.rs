@@ -381,7 +381,7 @@ impl HeroinnApp {
 
                 for info in all_host() {
 
-                    let clientid = info .clientid.clone();
+                    let clientid = info.clientid.clone();
 
                     let menu = |ui : &mut egui::Ui| {
                         if ui.button("Shell").clicked() {

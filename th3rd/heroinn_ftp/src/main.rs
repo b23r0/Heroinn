@@ -2,7 +2,7 @@ use std::{sync::{Arc, mpsc::{channel, Sender}}};
 
 use eframe::{egui, App};
 use egui_extras::{Size, StripBuilder};
-use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::DiskInfo, msgbox};
+use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::{method::{transfer_size, join_path}, FileInfo}, msgbox};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 use lazy_static::*;
@@ -39,10 +39,11 @@ impl std::fmt::Debug for FSType{
 struct FtpApp{
     initilized : bool,
     switch : SwitchDock,
-    cur_path : String,
+    local_path : String,
     remote_path : String,
-    remote_disk_info : Vec<DiskInfo>,
-    _sender : Sender<RpcMessage>
+    local_disk_info : Vec<FileInfo>,
+    remote_disk_info : Vec<FileInfo>,
+    sender : Sender<RpcMessage>
 }
 
 impl FtpApp{
@@ -55,13 +56,16 @@ impl FtpApp{
             },
         };
 
+        let local_disk_info = get_local_disk_info().unwrap();
+
         Self{ 
             initilized : false,
             switch : SwitchDock::List,
-            cur_path : String::from("/"),
+            local_path : String::from("/"),
             remote_path : String::from("/"),
             remote_disk_info,
-            _sender
+            sender: _sender,
+            local_disk_info
         }
     }
 }
@@ -98,10 +102,10 @@ impl App for FtpApp{
                         strip.strip(|builder| {
                             builder.sizes(Size::remainder(), 2).horizontal(|mut strip| {
                                 strip.cell(|ui| {
-                                    self.render_file_table("1", ctx, ui , FSType::Local , vec![1,2,3]);
+                                    self.render_file_table("1", ctx, ui , FSType::Local);
                                 });
                                 strip.cell(|ui| {
-                                    self.render_file_table("2", ctx, ui , FSType::Remote , vec![1,2,3]);
+                                    self.render_file_table("2", ctx, ui , FSType::Remote);
                                 });
                             });
                         });
@@ -136,7 +140,7 @@ impl App for FtpApp{
 
 impl FtpApp{
 
-    fn render_file_table(&mut self , id : &str , ctx :&egui::Context , ui : &mut egui::Ui , typ : FSType , files : Vec<u32>){
+    fn render_file_table(&mut self , id : &str , ctx :&egui::Context , ui : &mut egui::Ui , typ : FSType){
         egui::CentralPanel::default()
             .show_inside(ui, |ui| {
 
@@ -161,7 +165,7 @@ impl FtpApp{
                         });
                         strip.cell(|ui|{
                             if typ == FSType::Local{
-                                ui.label(&self.cur_path);
+                                ui.label(&self.local_path);
                             } else {
                                 ui.label(&self.remote_path);
                             }
@@ -169,7 +173,60 @@ impl FtpApp{
                         });
                         strip.cell(|ui|{
                             if ui.button("Directory up").clicked(){
-        
+                                if typ == FSType::Local{
+
+                                    let mut fullpath = join_path(vec![self.local_path.clone(), "..".to_string()]).unwrap()[0].clone();
+
+                                    // root path
+                                    if fullpath == self.local_path{
+                                        self.local_disk_info = get_local_disk_info().unwrap();
+                                        fullpath = String::from("/");
+                                    } else {
+                                        self.local_disk_info = match get_local_folder_info(&fullpath){
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                msgbox::error(&"heroinn FTP".to_string(), &format!("get folder info faild : {}" ,e));
+                                                ui.close_menu();
+                                                return;
+                                            },
+                                        };
+                                    }
+
+                                    self.local_path = fullpath;
+                                } else {
+                                    let mut fullpath = match get_remote_join_path(&self.sender ,&self.remote_path, &"..".to_string()){
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            msgbox::error(&"heroinn FTP".to_string(), &format!("join remote path faild : {}" ,e));
+                                            ui.close_menu();
+                                            return;
+                                        },
+                                    };
+                                    log::debug!("remote full path : {}" , fullpath);
+                                    // root path
+                                    if fullpath == self.remote_path{
+                                        self.remote_disk_info = match get_remote_disk_info(&self.sender){
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                msgbox::error(&"heroinn FTP".to_string(),&format!("get disk info error : {}" , e));
+                                                std::process::exit(0);
+                                            },
+                                        };
+
+                                        fullpath = String::from("/");
+                                    } else {
+                                        self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                msgbox::error(&"heroinn FTP".to_string(), &format!("get remote folder info faild : {}" ,e));
+                                                ui.close_menu();
+                                                return;
+                                            },
+                                        };
+                                    }
+    
+                                    self.remote_path = fullpath;
+                                }
                             }
                         });     
                     });
@@ -183,9 +240,9 @@ impl FtpApp{
                     .vertical(|mut strip|{
                         strip.cell(|ui|{
                             if typ == FSType::Remote{
-                                self.file_table(id,ctx, ui, files);
+                                self.file_table(id,ctx, ui, typ);
                             } else {
-                                self.file_table(id,ctx, ui, files);
+                                self.file_table(id,ctx, ui , typ);
                             }
                         });
                     });
@@ -194,18 +251,17 @@ impl FtpApp{
         });
     }
 
-    fn file_table(&mut self,id : &str ,_ : &egui::Context , ui: &mut egui::Ui , _files : Vec<u32>) {
+    fn file_table(&mut self,id : &str ,_ : &egui::Context , ui: &mut egui::Ui ,typ : FSType) {
         ui.push_id(id, |ui| {
             egui_extras::TableBuilder::new(ui)
             .striped(true)
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right().with_cross_align(egui::Align::Center))
             .column(Size::initial(50.0).at_least(50.0))
-            .column(Size::initial(100.0).at_least(50.0))
+            .column(Size::initial(110.0).at_least(50.0))
             .column(Size::initial(50.0).at_least(50.0))
-            .column(Size::initial(50.0).at_least(50.0))
+            .column(Size::initial(90.0).at_least(50.0))
             .column(Size::initial(150.0).at_least(50.0))
-            .column(Size::initial(55.0).at_least(50.0))
             .resizable(true)
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -223,13 +279,56 @@ impl FtpApp{
                 header.col(|ui| {
                     ui.heading("Last Modified");
                 });
-                header.col(|ui| {
-                    ui.heading("");
-                });
             })
             .body(|mut body| {
 
-                for i in &self.remote_disk_info {
+                let files = if typ == FSType::Remote { self.remote_disk_info.clone() } else { self.local_disk_info.clone() };
+
+                for i in files {
+
+                    let filename = i.name.clone();
+
+                    let mut menu = |ui : &mut egui::Ui| {
+                        if ui.button("Open").clicked() {
+                            if typ == FSType::Local{
+
+                                let fullpath = join_path(vec![self.local_path.clone(), filename.clone()]).unwrap()[0].clone();
+
+                                self.local_disk_info = match get_local_folder_info(&fullpath){
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        msgbox::error(&"heroinn FTP".to_string(), &format!("get folder info faild : {}" ,e));
+                                        ui.close_menu();
+                                        return;
+                                    },
+                                };
+
+                                self.local_path = fullpath;
+                            } else {
+                                let fullpath = match get_remote_join_path(&self.sender ,&self.remote_path, &filename){
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        msgbox::error(&"heroinn FTP".to_string(), &format!("join remote path faild : {}" ,e));
+                                        ui.close_menu();
+                                        return;
+                                    },
+                                };
+
+                                self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        msgbox::error(&"heroinn FTP".to_string(), &format!("get remote folder info faild : {}" ,e));
+                                        ui.close_menu();
+                                        return;
+                                    },
+                                };
+
+                                self.remote_path = fullpath;
+                            }
+                            ui.close_menu();
+                        }
+                    };
+
                     let row_height = 20.0;
                     body.row(row_height, |mut row| {
                         
@@ -237,26 +336,32 @@ impl FtpApp{
                             //ui.add(
                             //    egui::Image::new(self.listener_image.texture_id(ctx), egui::Vec2::new(30.0, 30.0))
                             //);
+                        }).context_menu(|ui| {
+                            menu(ui);
                         });
 
                         row.col(|ui| {
                             ui.label(i.name.clone());
+                        }).context_menu(|ui| {
+                            menu(ui);
                         });
+
                         row.col(|ui| {
                             ui.label(i.typ.clone());
+                        }).context_menu(|ui| {
+                            menu(ui);
                         });
 
                         row.col(|ui| {
-                            ui.label(format!("{}", i.size));
+                            ui.label(format!("{}", transfer_size(i.size as f64)));
+                        }).context_menu(|ui| {
+                            menu(ui);
                         });
 
                         row.col(|ui| {
-                            ui.label("");
-                        });
-
-                        row.col(|ui| {
-                            if ui.button("...").clicked(){
-                            };
+                            ui.label(i.last_modified.clone());
+                        }).context_menu(|ui| {
+                            menu(ui);
                         });
                     });
                 }
@@ -386,12 +491,13 @@ fn main() {
                     std::process::exit(0);
                 },
             };
+            log::debug!("ftp send msg to core : {}", msg.id);
             s2.send(&mut msg.serialize().unwrap()).unwrap();
         }
     });
 
     let mut options = eframe::NativeOptions::default();
-    options.initial_window_size = Some(egui::Vec2::new(1060.0,300.0));
+    options.initial_window_size = Some(egui::Vec2::new(1060.0,500.0));
     eframe::run_native(
         "Heroinn FTP",
         options,
