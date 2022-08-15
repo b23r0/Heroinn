@@ -494,12 +494,14 @@ fn main() {
 
     let args : Vec<String> = std::env::args().collect();
 
-    if args.len() < 2{
+    if args.len() < 3{
         return;
     }
 
     let mut s = TcpConnection::connect(&format!("127.0.0.1:{}" , args[1])).unwrap();
     let mut s2 = s.clone();
+
+    let title = args[2].clone();
 
     std::thread::spawn(move || {
         loop{
@@ -533,7 +535,7 @@ fn main() {
     let mut options = eframe::NativeOptions::default();
     options.initial_window_size = Some(egui::Vec2::new(1060.0,500.0));
     eframe::run_native(
-        "Heroinn FTP",
+        &format!("Heroinn FTP - {}", title),
         options,
         Box::new(|_cc| Box::new(FtpApp::new(sender))),
     );
