@@ -25,7 +25,12 @@ pub fn get_disk_info(_ : Vec<String>) -> Result<Vec<String>>{
     let sys = sysinfo::System::new_all();
     for d in sys.disks(){
         let name = d.mount_point().to_str().unwrap().to_string();
-        let typ = format!("{:?}", d.type_());
+        let mut typ = format!("{:?}", d.type_());
+
+        if typ.contains("Unknown"){
+            typ = "Unknown Drive".to_string();
+        }
+
         let size = d.total_space();
 
         let info = FileInfo{
@@ -46,6 +51,7 @@ pub fn get_folder_info(param : Vec<String>) -> Result<Vec<String>>{
 
     let cur_path = param[0].clone();
     let dirs = std::fs::read_dir(cur_path)?;
+
     for d in dirs{
         let d = d?;
         let t = d.file_type()?;
@@ -62,13 +68,27 @@ pub fn get_folder_info(param : Vec<String>) -> Result<Vec<String>>{
 			} else if t.is_symlink() {
 				String::from("SYMLINK")
 			} else {
-				String::from("OTHER")
+				String::from("Unknown")
 			},
             last_modified: mt.format("%Y-%m-%d %H:%M:%S").to_string()
         };
 
         ret.push(info.serialize()?);
     }
+
+    ret.sort_by(|a ,b | {
+        let a = FileInfo::parse(a).unwrap();
+        let b = FileInfo::parse(b).unwrap();
+        if a.typ == "FOLDER" && b.typ == "FOLDER"{
+            std::cmp::Ordering::Less
+        }else if a.typ == "FOLDER"{
+            std::cmp::Ordering::Less
+        } else if b.typ == "FOLDER" {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Less
+        }
+    });
     Ok(ret)
 }
 

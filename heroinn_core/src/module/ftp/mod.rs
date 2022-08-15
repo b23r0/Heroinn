@@ -1,5 +1,5 @@
 pub mod ftp_port;
-
+use std::env::current_dir;
 use std::sync::{mpsc::Sender, atomic::AtomicBool, Arc};
 use heroinn_util::{session::{Session, SessionBase, SessionPacket}};
 
@@ -21,7 +21,13 @@ impl Session for FtpServer{
 
         let closed = Arc::new(AtomicBool::new(false));
 
-        let ftp = new_ftp(&"heroinn_ftp.exe".to_string(), peer_addr)?;
+        #[cfg(not(target_os = "windows"))]
+        let driver_path = current_dir().unwrap().join("heroinn_ftp").to_str().unwrap().to_string();
+
+        #[cfg(target_os = "windows")]
+        let driver_path = current_dir().unwrap().join("heroinn_ftp.exe").to_str().unwrap().to_string();
+
+        let ftp = new_ftp(&driver_path, peer_addr)?;
 
         let mut ftp_1 = ftp.clone();
         let closed_2 = closed.clone();

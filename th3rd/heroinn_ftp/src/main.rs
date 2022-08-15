@@ -38,20 +38,24 @@ impl std::fmt::Debug for FSType{
 
 struct FtpApp{
     initilized : bool,
+    title : String,
     switch : SwitchDock,
     local_path : String,
     remote_path : String,
     local_disk_info : Vec<FileInfo>,
     remote_disk_info : Vec<FileInfo>,
-    sender : Sender<RpcMessage>
+    sender : Sender<RpcMessage>,
+    drive_image : egui_extras::RetainedImage,
+    folder_image : egui_extras::RetainedImage,
+    file_image : egui_extras::RetainedImage,
 }
 
 impl FtpApp{
-    pub fn new(_sender : Sender<RpcMessage>) -> Self{
-        let remote_disk_info = match get_remote_disk_info(&_sender){
+    pub fn new(sender : Sender<RpcMessage>) -> Self{
+        let remote_disk_info = match get_remote_disk_info(&sender){
             Ok(p) => p,
             Err(e) => {
-                msgbox::error(&"heroinn ftp".to_string(),&format!("get disk info error : {}" , e));
+                msgbox::error(&"heroinn FTP".to_string(),&format!("get disk info error : {}" , e));
                 std::process::exit(0);
             },
         };
@@ -64,8 +68,21 @@ impl FtpApp{
             local_path : String::from("/"),
             remote_path : String::from("/"),
             remote_disk_info,
-            sender: _sender,
-            local_disk_info
+            sender,
+            local_disk_info,
+            drive_image : egui_extras::RetainedImage::from_image_bytes(
+                "drive.ico",
+                include_bytes!("res/drive.ico"),
+            ).unwrap(),
+            folder_image : egui_extras::RetainedImage::from_image_bytes(
+                "folder.ico",
+                include_bytes!("res/folder.ico"),
+            ).unwrap(),
+            file_image : egui_extras::RetainedImage::from_image_bytes(
+                "file.ico",
+                include_bytes!("res/file.ico"),
+            ).unwrap(),
+            title : String::from("Heroinn FTP")
         }
     }
 }
@@ -197,7 +214,7 @@ impl FtpApp{
                                     let mut fullpath = match get_remote_join_path(&self.sender ,&self.remote_path, &"..".to_string()){
                                         Ok(p) => p,
                                         Err(e) => {
-                                            msgbox::error(&"heroinn FTP".to_string(), &format!("join remote path faild : {}" ,e));
+                                            msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
                                             ui.close_menu();
                                             return;
                                         },
@@ -208,7 +225,7 @@ impl FtpApp{
                                         self.remote_disk_info = match get_remote_disk_info(&self.sender){
                                             Ok(p) => p,
                                             Err(e) => {
-                                                msgbox::error(&"heroinn FTP".to_string(),&format!("get disk info error : {}" , e));
+                                                msgbox::error(&self.title.to_string(),&format!("get disk info error : {}" , e));
                                                 std::process::exit(0);
                                             },
                                         };
@@ -218,7 +235,7 @@ impl FtpApp{
                                         self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
                                             Ok(p) => p,
                                             Err(e) => {
-                                                msgbox::error(&"heroinn FTP".to_string(), &format!("get remote folder info faild : {}" ,e));
+                                                msgbox::error(&self.title.to_string(), &format!("get remote folder info faild : {}" ,e));
                                                 ui.close_menu();
                                                 return;
                                             },
@@ -251,7 +268,7 @@ impl FtpApp{
         });
     }
 
-    fn file_table(&mut self,id : &str ,_ : &egui::Context , ui: &mut egui::Ui ,typ : FSType) {
+    fn file_table(&mut self,id : &str ,ctx : &egui::Context , ui: &mut egui::Ui ,typ : FSType) {
         ui.push_id(id, |ui| {
             egui_extras::TableBuilder::new(ui)
             .striped(true)
@@ -297,7 +314,7 @@ impl FtpApp{
                                 self.local_disk_info = match get_local_folder_info(&fullpath){
                                     Ok(p) => p,
                                     Err(e) => {
-                                        msgbox::error(&"heroinn FTP".to_string(), &format!("get folder info faild : {}" ,e));
+                                        msgbox::error(&self.title.to_string(), &format!("get folder info faild : {}" ,e));
                                         ui.close_menu();
                                         return;
                                     },
@@ -308,7 +325,7 @@ impl FtpApp{
                                 let fullpath = match get_remote_join_path(&self.sender ,&self.remote_path, &filename){
                                     Ok(p) => p,
                                     Err(e) => {
-                                        msgbox::error(&"heroinn FTP".to_string(), &format!("join remote path faild : {}" ,e));
+                                        msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
                                         ui.close_menu();
                                         return;
                                     },
@@ -317,7 +334,7 @@ impl FtpApp{
                                 self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
                                     Ok(p) => p,
                                     Err(e) => {
-                                        msgbox::error(&"heroinn FTP".to_string(), &format!("get remote folder info faild : {}" ,e));
+                                        msgbox::error(&self.title.to_string(), &format!("get remote folder info faild : {}" ,e));
                                         ui.close_menu();
                                         return;
                                     },
@@ -332,10 +349,27 @@ impl FtpApp{
                     let row_height = 20.0;
                     body.row(row_height, |mut row| {
                         
-                        row.col(|_| {
-                            //ui.add(
-                            //    egui::Image::new(self.listener_image.texture_id(ctx), egui::Vec2::new(30.0, 30.0))
-                            //);
+                        row.col(|ui| {
+
+                            if i.typ == "FOLDER"{
+                                ui.add(
+                                    egui::Image::new(self.folder_image.texture_id(ctx), egui::Vec2::new(20.0, 20.0))
+                                );
+                            } else if i.typ == "FILE"{
+                                ui.add(
+                                    egui::Image::new(self.file_image.texture_id(ctx), egui::Vec2::new(20.0, 20.0))
+                                );
+                            } else if i.typ == "SSD" || i.typ == "HDD" || i.typ == "Unknown Drive" {
+                                ui.add(
+                                    egui::Image::new(self.drive_image.texture_id(ctx), egui::Vec2::new(20.0, 20.0))
+                                );
+                            } else {
+                                ui.add(
+                                    egui::Image::new(self.file_image.texture_id(ctx), egui::Vec2::new(20.0, 20.0))
+                                );
+                            }
+
+
                         }).context_menu(|ui| {
                             menu(ui);
                         });
@@ -369,7 +403,7 @@ impl FtpApp{
         });
     }
 
-    fn transfer_table(&mut self,id : &str ,_ : &egui::Context , ui: &mut egui::Ui , files : Vec<u32>) {
+    fn transfer_table(&mut self,id : &str ,ctx : &egui::Context , ui: &mut egui::Ui , files : Vec<u32>) {
         ui.push_id(id, |ui| {
             egui_extras::TableBuilder::new(ui)
             .striped(true)
@@ -416,10 +450,10 @@ impl FtpApp{
                     let row_height = 20.0;
                     body.row(row_height, |mut row| {
                         
-                        row.col(|_| {
-                            //ui.add(
-                            //    egui::Image::new(self.listener_image.texture_id(ctx), egui::Vec2::new(30.0, 30.0))
-                            //);
+                        row.col(|ui| {
+                            ui.add(
+                                egui::Image::new(self.file_image.texture_id(ctx), egui::Vec2::new(20.0, 20.0))
+                            );
                         });
 
                         row.col(|ui| {

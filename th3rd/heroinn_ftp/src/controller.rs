@@ -10,6 +10,11 @@ pub fn get_remote_disk_info(sender : &Sender<RpcMessage>) -> Result<Vec<FileInfo
     sender.send(msg.clone()).unwrap();
     match G_RPCCLIENT.wait_msg(&msg.id, 10){
         Ok(p) => {
+
+            if p.retcode != 0{
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+            }
+
             for i in &p.data{
                 let item = FileInfo::parse(i).unwrap();
                 remote_disk_info.push(item);
@@ -46,6 +51,11 @@ pub fn get_remote_folder_info(sender : &Sender<RpcMessage> , full_path : &String
     sender.send(msg.clone()).unwrap();
     match G_RPCCLIENT.wait_msg(&msg.id, 10){
         Ok(p) => {
+            
+            if p.retcode != 0{
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+            }
+
             for i in &p.data{
                 let item = FileInfo::parse(i).unwrap();
                 remote_folder_info.push(item);
@@ -64,6 +74,11 @@ pub fn get_remote_join_path(sender : &Sender<RpcMessage> , cur_path : &String , 
     sender.send(msg.clone()).unwrap();
     match G_RPCCLIENT.wait_msg(&msg.id, 10){
         Ok(p) => {
+            
+            if p.retcode != 0{
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+            }
+
             Ok(p.data[0].clone())
         }
         Err(e) => {

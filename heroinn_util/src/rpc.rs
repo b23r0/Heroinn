@@ -9,10 +9,10 @@ use crate::{cur_timestamp_secs};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RpcMessage{
     pub id : String,
-    name : String,
-    retcode : i32,
-    time : u64,
-    msg : String,
+    pub name : String,
+    pub retcode : i32,
+    pub time : u64,
+    pub msg : String,
     pub data : Vec<String>
 }
 

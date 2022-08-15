@@ -12,13 +12,19 @@ pub struct ShellServer{
 }
 
 static MAGIC_FLAG : [u8;2] = [0x37, 0x37];
-
+use std::env::current_dir;
 impl Session for ShellServer{
 
     fn new(sender : Sender<SessionBase> , clientid : &String , peer_addr : &String) -> std::io::Result<Self> {
         let closed = Arc::new(AtomicBool::new(false));
 
-        let term = match new_term(&"alacritty_driver.exe".to_string() , peer_addr){
+        #[cfg(not(target_os = "windows"))]
+        let driver_path = current_dir().unwrap().join("alacritty_driver").to_str().unwrap().to_string();
+
+        #[cfg(target_os = "windows")]
+        let driver_path = current_dir().unwrap().join("alacritty_driver.exe").to_str().unwrap().to_string();
+
+        let term = match new_term(&driver_path , peer_addr){
             Ok(p) => p,
             Err(e) => {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
