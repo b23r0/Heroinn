@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::packet::Message;
+use crate::protocol::TUNNEL_FLAG;
 use crate::{ HeroinnProtocol};
 
-use super::Server;
+use super::{Server, TunnelClient};
 use super::Client;
 
 const TCP_MAX_PACKET: u32 = 1024*9999;
@@ -19,12 +20,13 @@ pub struct TcpServer{
 }
 
 pub struct TcpConnection{
-    s : TcpStream
+    s : TcpStream,
+    is_tunnel : bool
 }
 
 impl Clone for TcpConnection{
     fn clone(&self) -> Self {
-        Self { s: self.s.try_clone().unwrap() }
+        Self { s: self.s.try_clone().unwrap() , is_tunnel:  self.is_tunnel }
     }
 }
 
@@ -72,6 +74,63 @@ impl Server<TcpStream> for TcpServer{
                                     Ok(_) => {},
                                     Err(_) => break,
                                 };
+
+                                if size_buf == TUNNEL_FLAG {
+                                    let mut port = [0u8;2];
+                                    match s_1.read_exact(&mut port){
+                                        Ok(_) => {},
+                                        Err(_) => break,
+                                    };
+
+                                    let port = u16::from_be_bytes(port);
+
+                                    let full_addr = format!("127.0.0.1:{}", port);
+                                    let tunnel_client = match TcpStream::connect(&full_addr){
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            log::error!("tunnel connect faild : {}" , e);
+                                            break;
+                                        },
+                                    };
+
+                                    let mut tunnel_client_1 = tunnel_client.try_clone().unwrap();
+                                    let mut s_2 = s_1.try_clone().unwrap();
+                                    std::thread::spawn(move || {
+                                        let mut buf = [0u8;1024];
+                                        loop{
+                                            let size = match tunnel_client_1.read(&mut buf){
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    log::error!("tunnel1 recv faild : {}" , e);
+                                                    break;
+                                                },
+                                            };
+
+                                            match s_2.write_all(&buf[..size]){
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    log::error!("tunnel1 send faild : {}" , e);
+                                                    break;
+                                                },
+                                            };
+                                        }
+
+                                        log::info!("tunnel1 finished!");
+
+                                        match tunnel_client_1.shutdown(std::net::Shutdown::Both){
+                                            Ok(_) => {},
+                                            Err(_) => {},
+                                        };
+
+                                        match tunnel_client_1.shutdown(std::net::Shutdown::Both){
+                                            Ok(_) => {},
+                                            Err(_) => {},
+                                        };
+                                    });
+
+                                    break;
+                                }
+
                                 let size = u32::from_be_bytes(size_buf);
                                 if size > TCP_MAX_PACKET{
                                     log::error!("packet length error!");
@@ -110,7 +169,7 @@ impl Server<TcpStream> for TcpServer{
         Ok(Self{
             local_addr,
             closed,
-            connections,
+            connections
         })
     }
 
@@ -152,14 +211,15 @@ impl Client<TcpStream> for TcpConnection{
             Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("address format error : {}", e))),
         };
         let s = TcpStream::connect(address)?;
-        Ok(Self{s})
+        Ok(Self{s , is_tunnel : false})
     }
 
     fn from(s : TcpStream) -> std::io::Result<Self> where Self: Sized {
-        Ok(Self{s})
+        Ok(Self{s , is_tunnel : false})
     }
 
     fn recv(&mut self) -> std::io::Result<Vec<u8>> {
+
         let mut size_buf = [0u8 ; 4];
         
         self.s.read_exact(&mut size_buf)?;
@@ -202,6 +262,37 @@ impl Client<TcpStream> for TcpConnection{
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
         self.s.local_addr()
+    }
+}
+
+impl TunnelClient for TcpConnection{
+    fn tunnel(remote_addr : & SocketAddr , server_local_port : u16) -> std::io::Result<Self> where Self: Sized {
+        let remote_addr = remote_addr.clone();
+        
+        log::info!("start tunnel tunnel [{}] [{}]", remote_addr , server_local_port);
+        let mut s = TcpStream::connect(remote_addr)?;
+
+        let buf = TUNNEL_FLAG.to_vec();
+        
+        s.write_all(&buf)?;
+        s.write_all(&server_local_port.to_be_bytes().to_vec())?;
+
+        Ok(Self{
+            s,
+            is_tunnel: true,
+        })
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+        self.s.read_exact(buf)
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.s.write_all(buf)
+    }
+
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.s.read(buf)
     }
 }
 

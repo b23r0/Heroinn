@@ -4,6 +4,8 @@ use std::{io::*, net::SocketAddr};
 
 use crate::{HeroinnProtocol, packet::Message};
 
+static TUNNEL_FLAG : [u8;4] = [0x38, 0x38 , 0x38, 0x38];
+
 pub trait Client<T>{
     fn connect(address : &str) -> Result<Self> where Self: Sized;
     fn from(s : T) -> Result<Self> where Self: Sized;
@@ -30,4 +32,11 @@ pub trait Server<T> {
     fn contains_addr(&mut self , peer_addr : &SocketAddr) -> bool;
 
     fn close(&mut self);
+}
+
+pub trait TunnelClient {
+    fn tunnel(remote_addr : & SocketAddr , server_local_port : u16) -> Result<Self> where Self: Sized;
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<()>;
+    fn write_all(&mut self, buf: &[u8]) -> Result<()>;
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
 }
