@@ -1,6 +1,7 @@
 pub mod ftp_port;
 use std::env::current_dir;
 use std::sync::{mpsc::Sender, atomic::AtomicBool, Arc};
+use heroinn_util::ftp::{FTPPacket, FTPId};
 use heroinn_util::{session::{Session, SessionBase, SessionPacket}};
 
 use self::ftp_port::{FtpInstance, new_ftp};
@@ -8,7 +9,7 @@ pub struct FtpServer{
     id : String,
     clientid : String,
     closed : Arc<AtomicBool>,
-    _sender : Sender<SessionBase>,
+    sender : Sender<SessionBase>,
     instance : FtpInstance
 }
 
@@ -82,8 +83,8 @@ impl Session for FtpServer{
         Ok(Self{
             id,
             clientid: clientid.clone(),
-            closed: Arc::new(AtomicBool::new(true)),
-            _sender : sender,
+            closed,
+            sender,
             instance: ftp,
         })
     }
@@ -98,11 +99,31 @@ impl Session for FtpServer{
     }
 
     fn alive(&self) -> bool {
-        self.closed.load(std::sync::atomic::Ordering::Relaxed)
+        !self.closed.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn close(&mut self) {
-        self.closed.store(false, std::sync::atomic::Ordering::Relaxed)
+
+        let packet = SessionPacket{
+            id: self.id.clone(),
+            data: FTPPacket{
+                id: FTPId::Close.to_u8(),
+                data: vec![],
+            }.serialize().unwrap(),
+        };
+
+        match self.sender.send(SessionBase{
+            id: self.id.clone(),
+            clientid : self.clientid.clone(),
+            packet : packet
+        }){
+            Ok(_) => {},
+            Err(e) => {
+                log::info!("sender close msg error: {}" , e);
+            },
+        };
+        log::info!("ftp session closed");
+        self.closed.store(true, std::sync::atomic::Ordering::Relaxed)
     }
 
     fn clientid(&self) -> String {

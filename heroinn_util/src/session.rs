@@ -99,4 +99,8 @@ impl<T : Session> SessionManager<T>{
             self.sessions.remove(&i);
         }
     }
+
+    pub fn count(&self) -> usize{
+        self.sessions.len()
+    }
 }

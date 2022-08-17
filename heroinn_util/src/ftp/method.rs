@@ -95,3 +95,9 @@ pub fn get_folder_info(param : Vec<String>) -> Result<Vec<String>>{
 pub fn join_path(param : Vec<String>) -> Result<Vec<String>>{
     Ok(vec![Path::new(&param[0]).join(&param[1]).absolutize().unwrap().to_str().unwrap().to_string()])
 }
+
+pub fn remove_file(param : Vec<String>) -> Result<Vec<String>>{
+    let filename = param[0].clone();
+    std::fs::remove_file(filename)?;
+    Ok(vec![])
+}

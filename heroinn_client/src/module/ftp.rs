@@ -1,5 +1,5 @@
 use std::sync::{Arc, atomic::AtomicBool, mpsc::Sender};
-use heroinn_util::{session::{Session, SessionBase, SessionPacket}, rpc::{RpcServer, RpcMessage}, ftp::method::{get_disk_info, get_folder_info, join_path}};
+use heroinn_util::{session::{Session, SessionBase, SessionPacket}, rpc::{RpcServer, RpcMessage}, ftp::{method::*, FTPPacket, FTPId}};
 
 pub struct FtpClient{
     id : String,
@@ -15,6 +15,7 @@ impl Session for FtpClient{
         rpc_server.register(&"get_disk_info".to_string(), get_disk_info);
         rpc_server.register(&"get_folder_info".to_string(), get_folder_info);
         rpc_server.register(&"join_path".to_string(), join_path);
+        rpc_server.register(&"remove_file".to_string(), remove_file);
         Ok(Self{
             id: id.clone(),
             clientid: clientid.clone(),
@@ -33,18 +34,39 @@ impl Session for FtpClient{
     }
 
     fn write(&mut self, data : &Vec<u8>) -> std::io::Result<()> {
-        log::debug!("recv rpc call");
-        let msg = RpcMessage::parse(data)?;
-        let ret = self.rpc_server.call(&msg);
-        let packet = SessionPacket{
-            id: self.id.clone(),
-            data: ret.serialize()?,
-        };
-        log::debug!("call ret : {:?}" , ret);
-        if let Err(e) = self.sender.send(SessionBase { id: self.id.clone(), clientid: self.clientid.clone() , packet }){
-            log::error!("session sender error : {}", e );
-            self.closed.store(true, std::sync::atomic::Ordering::Relaxed);
-        };
+
+        let packet = FTPPacket::parse(data)?;
+
+        match packet.id(){
+            FTPId::RPC => {
+                log::debug!("recv rpc call");
+                let msg = RpcMessage::parse(&packet.data)?;
+                let ret = self.rpc_server.call(&msg);
+
+                let packet = FTPPacket{
+                    id: FTPId::RPC.to_u8(),
+                    data: ret.serialize()?,
+                };
+
+                let packet = SessionPacket{
+                    id: self.id.clone(),
+                    data: packet.serialize()?,
+                };
+                log::debug!("call ret : {:?}" , ret);
+                if let Err(e) = self.sender.send(SessionBase { id: self.id.clone(), clientid: self.clientid.clone() , packet }){
+                    log::error!("session sender error : {}", e );
+                    self.closed.store(true, std::sync::atomic::Ordering::Relaxed);
+                };
+            },
+            FTPId::Close => {
+                self.close();
+            },
+            FTPId::Unknown => {
+
+            },
+        }
+
+
         Ok(())
     }
 
@@ -53,6 +75,7 @@ impl Session for FtpClient{
     }
 
     fn close(&mut self) {
+        log::info!("ftp session closed");
         self.closed.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 

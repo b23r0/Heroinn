@@ -2,7 +2,7 @@ use std::{sync::{Arc, mpsc::{channel, Sender}}};
 
 use eframe::{egui, App};
 use egui_extras::{Size, StripBuilder};
-use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::{method::{transfer_size, join_path}, FileInfo}, msgbox};
+use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::{method::{transfer_size, join_path}, FileInfo, FTPPacket, FTPId}, msgbox};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 use lazy_static::*;
@@ -44,14 +44,19 @@ struct FtpApp{
     remote_path : String,
     local_disk_info : Vec<FileInfo>,
     remote_disk_info : Vec<FileInfo>,
-    sender : Sender<RpcMessage>,
+    sender : Sender<FTPPacket>,
     drive_image : egui_extras::RetainedImage,
     folder_image : egui_extras::RetainedImage,
     file_image : egui_extras::RetainedImage,
+    local_folder_strace : Vec<String>,
+    remote_folder_strace : Vec<String>
 }
 
 impl FtpApp{
-    pub fn new(sender : Sender<RpcMessage>) -> Self{
+
+    const ROOT_FLAG: &'static str = "[DISK]";
+
+    pub fn new(sender : Sender<FTPPacket>) -> Self{
         let remote_disk_info = match get_remote_disk_info(&sender){
             Ok(p) => p,
             Err(e) => {
@@ -65,8 +70,8 @@ impl FtpApp{
         Self{ 
             initilized : false,
             switch : SwitchDock::List,
-            local_path : String::from("/"),
-            remote_path : String::from("/"),
+            local_path : String::from(FtpApp::ROOT_FLAG),
+            remote_path : String::from(FtpApp::ROOT_FLAG),
             remote_disk_info,
             sender,
             local_disk_info,
@@ -82,7 +87,9 @@ impl FtpApp{
                 "file.ico",
                 include_bytes!("res/file.ico"),
             ).unwrap(),
-            title : String::from("Heroinn FTP")
+            title : String::from("Heroinn FTP"),
+            local_folder_strace : vec![],
+            remote_folder_strace : vec![]
         }
     }
 }
@@ -175,7 +182,7 @@ impl FtpApp{
                     builder
                     .size(Size::exact(80.0))
                     .size(Size::remainder())
-                    .size(Size::exact(80.0))
+                    .size(Size::exact(120.0))
                     .horizontal(|mut strip|{
                         strip.cell(|ui|{
                             ui.label("Current Path :");
@@ -188,63 +195,97 @@ impl FtpApp{
                             }
                             
                         });
-                        strip.cell(|ui|{
-                            if ui.button("Directory up").clicked(){
-                                if typ == FSType::Local{
-
-                                    let mut fullpath = join_path(vec![self.local_path.clone(), "..".to_string()]).unwrap()[0].clone();
-
-                                    // root path
-                                    if fullpath == self.local_path{
-                                        self.local_disk_info = get_local_disk_info().unwrap();
-                                        fullpath = String::from("/");
-                                    } else {
-                                        self.local_disk_info = match get_local_folder_info(&fullpath){
-                                            Ok(p) => p,
-                                            Err(e) => {
-                                                msgbox::error(&"heroinn FTP".to_string(), &format!("get folder info faild : {}" ,e));
-                                                ui.close_menu();
-                                                return;
-                                            },
-                                        };
+                        strip.strip(|builder|{
+                            builder
+                            .size(Size::exact(60.0))
+                            .size(Size::exact(60.0))
+                            .horizontal(|mut strip|{
+                                strip.cell(|ui|{
+                                    if ui.button("Refresh").clicked(){
+                                        if typ == FSType::Local{
+                                            self.local_disk_info = FtpApp::refresh_local_path(&self.local_path);
+                                        } else {
+                                            self.remote_disk_info = FtpApp::refresh_remote_path(&self.remote_path , &self.sender);
+                                        }
                                     }
+                                });
 
-                                    self.local_path = fullpath;
-                                } else {
-                                    let mut fullpath = match get_remote_join_path(&self.sender ,&self.remote_path, &"..".to_string()){
-                                        Ok(p) => p,
-                                        Err(e) => {
-                                            msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
-                                            ui.close_menu();
-                                            return;
-                                        },
-                                    };
-                                    log::debug!("remote full path : {}" , fullpath);
-                                    // root path
-                                    if fullpath == self.remote_path{
-                                        self.remote_disk_info = match get_remote_disk_info(&self.sender){
-                                            Ok(p) => p,
-                                            Err(e) => {
-                                                msgbox::error(&self.title.to_string(),&format!("get disk info error : {}" , e));
-                                                std::process::exit(0);
-                                            },
-                                        };
-
-                                        fullpath = String::from("/");
-                                    } else {
-                                        self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
-                                            Ok(p) => p,
-                                            Err(e) => {
-                                                msgbox::error(&self.title.to_string(), &format!("get remote folder info faild : {}" ,e));
-                                                ui.close_menu();
+                                strip.cell(|ui|{
+                                    if ui.button("Go Back").clicked(){
+                                        if typ == FSType::Local{
+        
+                                            if self.local_folder_strace.is_empty(){
                                                 return;
-                                            },
-                                        };
+                                            }
+        
+                                            let parent_path = self.local_folder_strace.pop().unwrap();
+        
+                                            if parent_path == FtpApp::ROOT_FLAG{
+                                                self.local_disk_info = get_local_disk_info().unwrap();
+                                                self.local_path = String::from(FtpApp::ROOT_FLAG);
+                                                return;
+                                            }
+        
+                                            let fullpath = join_path(vec![parent_path, ".".to_string()]).unwrap()[0].clone();
+        
+                                            self.local_disk_info = match get_local_folder_info(&fullpath){
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    msgbox::error(&"heroinn FTP".to_string(), &format!("get folder info faild : {}" ,e));
+                                                    ui.close_menu();
+                                                    return;
+                                                },
+                                            };
+        
+                                            self.local_path = fullpath;
+                                        } else {
+        
+                                            if self.remote_folder_strace.is_empty(){
+                                                return;
+                                            }
+        
+                                            let parent_path = self.remote_folder_strace.pop().unwrap();
+        
+                                            if parent_path == FtpApp::ROOT_FLAG{
+                                                self.remote_disk_info = match get_remote_disk_info(&self.sender){
+                                                    Ok(p) => p,
+                                                    Err(e) => {
+                                                        msgbox::error(&self.title.to_string(),&format!("get disk info error : {}" , e));
+                                                        return;
+                                                    },
+                                                };
+        
+                                                self.remote_path = String::from(FtpApp::ROOT_FLAG);
+                                                return;
+                                            }
+                                            
+                                            let fullpath = match get_remote_join_path(&self.sender ,&parent_path, &".".to_string()){
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
+                                                    ui.close_menu();
+                                                    return;
+                                                },
+                                            };
+                                            log::debug!("remote full path : {}" , fullpath);
+        
+                                            self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    msgbox::error(&self.title.to_string(), &format!("get remote folder info faild : {}" ,e));
+                                                    ui.close_menu();
+                                                    return;
+                                                },
+                                            };
+            
+                                            self.remote_path = fullpath;
+                                        }
                                     }
-    
-                                    self.remote_path = fullpath;
-                                }
-                            }
+                                });
+                            });
+
+
+
                         });     
                     });
                 });
@@ -278,7 +319,7 @@ impl FtpApp{
             .column(Size::initial(110.0).at_least(50.0))
             .column(Size::initial(50.0).at_least(50.0))
             .column(Size::initial(90.0).at_least(50.0))
-            .column(Size::initial(150.0).at_least(50.0))
+            .column(Size::initial(165.0).at_least(50.0))
             .resizable(true)
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -306,43 +347,103 @@ impl FtpApp{
                     let filename = i.name.clone();
 
                     let mut menu = |ui : &mut egui::Ui| {
-                        if ui.button("Open").clicked() {
-                            if typ == FSType::Local{
+                        if i.typ == "FOLDER" || i.typ == "SSD" || i.typ == "HDD" || i.typ == "Unknown Drive"{
+                            if ui.button("Open").clicked() {
+                                if typ == FSType::Local{
+    
+                                    let fullpath = join_path(vec![self.local_path.clone(), filename.clone()]).unwrap()[0].clone();
+    
+                                    self.local_disk_info = match get_local_folder_info(&fullpath){
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            msgbox::error(&self.title.to_string(), &format!("get folder info faild : {}" ,e));
+                                            ui.close_menu();
+                                            return;
+                                        },
+                                    };
+    
+                                    self.local_folder_strace.push(self.local_path.clone());
+                                    self.local_path = fullpath;
+                                } else {
+                                    let fullpath = match get_remote_join_path(&self.sender ,&self.remote_path, &filename){
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
+                                            ui.close_menu();
+                                            return;
+                                        },
+                                    };
+    
+                                    self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            msgbox::error(&self.title.to_string(), &format!("get remote folder info faild : {}" ,e));
+                                            ui.close_menu();
+                                            return;
+                                        },
+                                    };
 
-                                let fullpath = join_path(vec![self.local_path.clone(), filename.clone()]).unwrap()[0].clone();
-
-                                self.local_disk_info = match get_local_folder_info(&fullpath){
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        msgbox::error(&self.title.to_string(), &format!("get folder info faild : {}" ,e));
-                                        ui.close_menu();
-                                        return;
-                                    },
-                                };
-
-                                self.local_path = fullpath;
-                            } else {
-                                let fullpath = match get_remote_join_path(&self.sender ,&self.remote_path, &filename){
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
-                                        ui.close_menu();
-                                        return;
-                                    },
-                                };
-
-                                self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        msgbox::error(&self.title.to_string(), &format!("get remote folder info faild : {}" ,e));
-                                        ui.close_menu();
-                                        return;
-                                    },
-                                };
-
-                                self.remote_path = fullpath;
+                                    self.remote_folder_strace.push(self.remote_path.clone());
+                                    self.remote_path = fullpath;
+                                }
+                                ui.close_menu();
                             }
-                            ui.close_menu();
+                        }
+
+                        if i.typ == "FILE"{
+
+                            if typ == FSType::Remote{
+                                if ui.button("Download").clicked() {
+                                    ui.close_menu();
+                                }
+                            } else {
+                                if ui.button("Upload").clicked() {
+                                    ui.close_menu();
+                                }
+                            }
+
+                            if ui.button("Delete").clicked() {
+
+                                if typ == FSType::Remote{
+                                    let fullpath = match get_remote_join_path(&self.sender ,&self.remote_path, &filename){
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
+                                            ui.close_menu();
+                                            return;
+                                        },
+                                    };
+    
+                                    match delete_remote_file(&self.sender , &fullpath){
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            msgbox::error(&self.title.to_string(), &format!("delete remote file info faild : {}" ,e));
+                                            ui.close_menu();
+                                            return;
+                                        },
+                                    };
+
+                                    self.remote_disk_info = FtpApp::refresh_remote_path(&self.remote_path , &self.sender);
+                                } else {
+                                    let fullpath = join_path(vec![self.local_path.clone(), filename.clone()]).unwrap()[0].clone();
+
+                                    match delete_local_file(&fullpath){
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            msgbox::error(&self.title.to_string(), &format!("delete local file faild : {}" ,e));
+                                            ui.close_menu();
+                                            return;
+                                        },
+                                    };
+
+                                    self.local_disk_info = FtpApp::refresh_local_path(&self.local_path);
+                                }
+                                
+                                ui.close_menu();
+                            }
+                            if ui.button("Properties").clicked() {
+                                ui.close_menu();
+                            }
                         }
                     };
 
@@ -486,6 +587,41 @@ impl FtpApp{
             });
         });
     }
+    fn refresh_local_path(local_path : &String) -> Vec<FileInfo> {
+
+        if local_path == FtpApp::ROOT_FLAG{
+            return get_local_disk_info().unwrap();
+        }
+
+        match get_local_folder_info(local_path){
+            Ok(p) => p,
+            Err(e) => {
+                msgbox::error(&"heroinn FTP".to_string(), &format!("get folder info faild : {}" ,e));
+                vec![]
+            },
+        }
+    }
+    fn refresh_remote_path(remote_path : &String , sender : &Sender<FTPPacket> ) -> Vec<FileInfo> {
+
+        if remote_path == FtpApp::ROOT_FLAG{
+            match get_remote_disk_info(&sender){
+                Ok(p) => p,
+                Err(e) => {
+                    msgbox::error(&"heroinn FTP".to_string(),&format!("get disk info error : {}" , e));
+                    vec![]
+                },
+            };
+            
+        }
+
+        match get_remote_folder_info(sender , remote_path){
+            Ok(p) => p,
+            Err(e) => {
+                msgbox::error(&"heroinn FTP".to_string(), &format!("get remote folder info faild : {}" ,e));
+                vec![]
+            },
+        }
+    }
 }
 
 fn main() {
@@ -511,13 +647,26 @@ fn main() {
                     std::process::exit(0);
                 },
             };
-            let msg = RpcMessage::parse(&data).unwrap();
-            log::debug!("ftp recv msg from core : {}", msg.id);
-            G_RPCCLIENT.write(&msg);
+            let packet = FTPPacket::parse(&data).unwrap();
+
+            match packet.id(){
+                FTPId::RPC => {
+                    let msg = RpcMessage::parse(&packet.data).unwrap();
+                    log::debug!("ftp recv msg from core : {}", msg.id);
+                    G_RPCCLIENT.write(&msg);
+                },
+                FTPId::Close => {
+                    std::process::exit(0);
+                },
+                FTPId::Unknown => {
+    
+                },
+            }
+
         }
     });
 
-    let (sender , receiver) = channel::<RpcMessage>();
+    let (sender , receiver) = channel::<FTPPacket>();
 
     std::thread::spawn(move || {
         loop{

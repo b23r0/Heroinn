@@ -1,13 +1,19 @@
-use heroinn_util::{rpc::RpcMessage, ftp::{method::{get_disk_info, get_folder_info}, FileInfo}};
+use heroinn_util::{rpc::RpcMessage, ftp::{method::{get_disk_info, get_folder_info, remove_file}, FileInfo, FTPPacket, FTPId}};
 use std::{io::*, sync::mpsc::Sender};
 
 use crate::G_RPCCLIENT;
 
+fn build_ftp_rpc_packet(rpc_data : &RpcMessage) -> Result<FTPPacket>{
+    Ok(FTPPacket{
+        id: FTPId::RPC.to_u8(),
+        data: rpc_data.serialize()?,
+    })
+}
 
-pub fn get_remote_disk_info(sender : &Sender<RpcMessage>) -> Result<Vec<FileInfo>>{
+pub fn get_remote_disk_info(sender : &Sender<FTPPacket>) -> Result<Vec<FileInfo>>{
     let msg = RpcMessage::build_call("get_disk_info" , vec![]);
     let mut remote_disk_info = vec![];
-    sender.send(msg.clone()).unwrap();
+    sender.send(build_ftp_rpc_packet(&msg)?).unwrap();
     match G_RPCCLIENT.wait_msg(&msg.id, 10){
         Ok(p) => {
 
@@ -45,10 +51,10 @@ pub fn get_local_disk_info() -> Result<Vec<FileInfo>>{
     }
 }
 
-pub fn get_remote_folder_info(sender : &Sender<RpcMessage> , full_path : &String) -> Result<Vec<FileInfo>>{
+pub fn get_remote_folder_info(sender : &Sender<FTPPacket> , full_path : &String) -> Result<Vec<FileInfo>>{
     let msg = RpcMessage::build_call("get_folder_info" , vec![full_path.clone()]);
     let mut remote_folder_info = vec![];
-    sender.send(msg.clone()).unwrap();
+    sender.send(build_ftp_rpc_packet(&msg)?).unwrap();
     match G_RPCCLIENT.wait_msg(&msg.id, 10){
         Ok(p) => {
             
@@ -69,9 +75,9 @@ pub fn get_remote_folder_info(sender : &Sender<RpcMessage> , full_path : &String
     }
 }
 
-pub fn get_remote_join_path(sender : &Sender<RpcMessage> , cur_path : &String , filename : &String) -> Result<String>{
+pub fn get_remote_join_path(sender : &Sender<FTPPacket> , cur_path : &String , filename : &String) -> Result<String>{
     let msg = RpcMessage::build_call("join_path" , vec![cur_path.clone() , filename.clone()]);
-    sender.send(msg.clone()).unwrap();
+    sender.send(build_ftp_rpc_packet(&msg)?).unwrap();
     match G_RPCCLIENT.wait_msg(&msg.id, 10){
         Ok(p) => {
             
@@ -97,6 +103,29 @@ pub fn get_local_folder_info(full_path : &String) -> Result<Vec<FileInfo>>{
             }
 
             Ok(local_folder_info)
+        }
+        Err(e) => {
+            Err(e)
+        }
+    }
+}
+
+pub fn delete_local_file(full_path : &String) -> Result<()>{
+    remove_file(vec![full_path.clone()])?;
+    Ok(())
+}
+
+pub fn delete_remote_file(sender : &Sender<FTPPacket> ,full_path : &String) -> Result<()>{
+    let msg = RpcMessage::build_call("remove_file" , vec![full_path.clone()]);
+    sender.send(build_ftp_rpc_packet(&msg)?).unwrap();
+    match G_RPCCLIENT.wait_msg(&msg.id, 10){
+        Ok(p) => {
+            
+            if p.retcode != 0{
+                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+            }
+
+            Ok(())
         }
         Err(e) => {
             Err(e)

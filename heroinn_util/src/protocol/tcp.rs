@@ -56,6 +56,7 @@ impl Server<TcpStream> for TcpServer{
         std::thread::spawn(move || {
 
             for stream in server.incoming(){
+                std::thread::sleep(std::time::Duration::from_millis(200));
                 let cb_data = cb_data.clone();
                 match stream {
                     Ok(s) => {
@@ -368,7 +369,7 @@ fn test_tcp_tunnel(){
         client1.read_exact(&mut buf).unwrap();
         assert!(buf == [5,6,7,8]);
     }
-    
+
     client1.close();
     server.close();
 }

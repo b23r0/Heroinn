@@ -45,8 +45,12 @@ lazy_static!{
                 let mut session = G_SHELL_SESSION.lock().unwrap();
                 session.gc();
 
+                log::info!("shell session : {}" , session.count());
+
                 let mut session = G_FTP_SESSION.lock().unwrap();
                 session.gc();
+
+                log::info!("ftp session : {}" , session.count());
             }
         });
     

@@ -38,6 +38,10 @@ fn main() {
             std::thread::sleep(Duration::from_secs(HEART_BEAT_TIME));
             let mut shell_session = shell_session_mgr_1.lock().unwrap();
             let mut ftp_session = ftp_session_mgr_1.lock().unwrap();
+
+            log::info!("shell session : {}" , shell_session.count());
+            log::info!("ftp session : {}" , ftp_session.count());
+
             shell_session.gc();
             ftp_session.gc();
         }
