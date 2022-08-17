@@ -39,8 +39,10 @@ impl Server<TcpStream> for TcpServer{
         cb_data : CB,
         cbcb : CBCB,
     ) -> std::io::Result<Self> where Self: Sized{
-        let local_addr : SocketAddr = address.parse().unwrap();
+        let mut local_addr : SocketAddr = address.parse().unwrap();
         let server = TcpListener::bind(local_addr)?;
+        local_addr = server.local_addr().unwrap();
+
         server.set_nonblocking(true)?;
 
         let connections = Arc::new(Mutex::new(HashMap::new()));
@@ -122,7 +124,42 @@ impl Server<TcpStream> for TcpServer{
                                             Err(_) => {},
                                         };
 
-                                        match tunnel_client_1.shutdown(std::net::Shutdown::Both){
+                                        match s_2.shutdown(std::net::Shutdown::Both){
+                                            Ok(_) => {},
+                                            Err(_) => {},
+                                        };
+                                    });
+
+                                    let mut tunnel_client_2 = tunnel_client.try_clone().unwrap();
+                                    let mut s_3 = s_1.try_clone().unwrap();
+                                    std::thread::spawn(move || {
+                                        let mut buf = [0u8;1024];
+                                        loop{
+                                            let size = match s_3.read(&mut buf){
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    log::error!("tunnel2 recv faild : {}" , e);
+                                                    break;
+                                                },
+                                            };
+
+                                            match tunnel_client_2.write_all(&buf[..size]){
+                                                Ok(p) => p,
+                                                Err(e) => {
+                                                    log::error!("tunnel2 send faild : {}" , e);
+                                                    break;
+                                                },
+                                            };
+                                        }
+
+                                        log::info!("tunnel2 finished!");
+
+                                        match s_3.shutdown(std::net::Shutdown::Both){
+                                            Ok(_) => {},
+                                            Err(_) => {},
+                                        };
+
+                                        match tunnel_client_2.shutdown(std::net::Shutdown::Both){
                                             Ok(_) => {},
                                             Err(_) => {},
                                         };
@@ -147,7 +184,7 @@ impl Server<TcpStream> for TcpServer{
                                 cb_data.lock().unwrap()(HeroinnProtocol::TCP , buf, peer_addr, cbcb);
                             }
 
-                            log::info!("connection closed : {}" , peer_addr);
+                            log::info!("connection closed or enter tunnel : {}" , peer_addr);
                             connections_2.lock().unwrap().remove(&peer_addr);
                         });
 
@@ -266,10 +303,10 @@ impl Client<TcpStream> for TcpConnection{
 }
 
 impl TunnelClient for TcpConnection{
-    fn tunnel(remote_addr : & SocketAddr , server_local_port : u16) -> std::io::Result<Self> where Self: Sized {
-        let remote_addr = remote_addr.clone();
+    fn tunnel(remote_addr : &str , server_local_port : u16) -> std::io::Result<Self> where Self: Sized {
+        let remote_addr : SocketAddr = remote_addr.parse().unwrap();
         
-        log::info!("start tunnel tunnel [{}] [{}]", remote_addr , server_local_port);
+        log::info!("start tunnel [{}] [{}]", remote_addr , server_local_port);
         let mut s = TcpStream::connect(remote_addr)?;
 
         let buf = TUNNEL_FLAG.to_vec();
@@ -306,4 +343,32 @@ impl Drop for TcpServer{
             }
         }
     }
+}
+
+#[test]
+fn test_tcp_tunnel(){
+
+    let mut server = TcpServer::new(&"127.0.0.1:0", |_ , _ ,_ ,_| {} , |_| {}).unwrap();
+    let server2 = TcpListener::bind(&"127.0.0.1:0").unwrap();
+
+    let remote = &format!("127.0.0.1:{}" , server.local_addr().unwrap().port());
+    let remote_local_port = server2.local_addr().unwrap().port();
+    let mut client1 = TcpConnection::tunnel(remote, remote_local_port).unwrap();
+
+    let (mut client2 , _) = server2.accept().unwrap();
+
+    for _ in 0..3{
+        let mut buf = [0u8;4];
+        client1.write_all(&[0,1,2,3]).unwrap();
+        client2.read_exact(&mut buf).unwrap();
+        assert!(buf == [0,1,2,3]);
+
+        let mut buf = [0u8;4];
+        client2.write_all(&[5,6,7,8]).unwrap();
+        client1.read_exact(&mut buf).unwrap();
+        assert!(buf == [5,6,7,8]);
+    }
+    
+    client1.close();
+    server.close();
 }

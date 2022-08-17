@@ -35,7 +35,7 @@ pub trait Server<T> {
 }
 
 pub trait TunnelClient {
-    fn tunnel(remote_addr : & SocketAddr , server_local_port : u16) -> Result<Self> where Self: Sized;
+    fn tunnel(remote_addr : &str , server_local_port : u16) -> Result<Self> where Self: Sized;
     fn read_exact(&mut self, buf: &mut [u8]) -> Result<()>;
     fn write_all(&mut self, buf: &[u8]) -> Result<()>;
     fn read(&mut self, buf: &mut [u8]) -> Result<usize>;
