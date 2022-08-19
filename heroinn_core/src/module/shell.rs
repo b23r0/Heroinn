@@ -19,10 +19,10 @@ impl Session for ShellServer{
         let closed = Arc::new(AtomicBool::new(false));
 
         #[cfg(not(target_os = "windows"))]
-        let driver_path = current_dir().unwrap().join("alacritty_driver").to_str().unwrap().to_string();
+        let driver_path = current_dir().unwrap().join("heroinn_shell").to_str().unwrap().to_string();
 
         #[cfg(target_os = "windows")]
-        let driver_path = current_dir().unwrap().join("alacritty_driver.exe").to_str().unwrap().to_string();
+        let driver_path = current_dir().unwrap().join("heroinn_shell.exe").to_str().unwrap().to_string();
 
         let term = match new_term(&driver_path , peer_addr){
             Ok(p) => p,

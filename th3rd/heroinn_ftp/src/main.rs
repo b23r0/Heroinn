@@ -1,8 +1,8 @@
-use std::{sync::{Arc, mpsc::{channel, Sender}}};
+use std::{sync::{Arc, mpsc::{channel, Sender}, RwLock}};
 
 use eframe::{egui, App};
 use egui_extras::{Size, StripBuilder};
-use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::{method::{transfer_size, join_path}, FileInfo, FTPPacket, FTPId}, msgbox};
+use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::{method::{transfer_size, join_path, transfer_speed}, FileInfo, FTPPacket, FTPId}, msgbox};
 use log::LevelFilter;
 use simple_logger::SimpleLogger;
 use lazy_static::*;
@@ -12,6 +12,7 @@ use controller::*;
 
 lazy_static!{
     static ref G_RPCCLIENT : Arc<RpcClient> = Arc::new(RpcClient::new());
+    static ref G_TRANSFER : Arc<RwLock<Vec<TransferInfo>>> = Arc::new(RwLock::new(vec![]));
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -34,6 +35,17 @@ impl std::fmt::Debug for FSType{
             Self::Remote => write!(f, "Remote FS"),
         }
     }
+}
+
+pub struct TransferInfo{
+    pub last_tick : u64,
+    pub typ : String,
+    pub local_path : String,
+    pub remote_path : String,
+    pub size : f64,
+    pub remaind_size : f64,
+    pub speed : f64,
+    pub remaind_time : f64
 }
 
 struct FtpApp{
@@ -150,7 +162,7 @@ impl App for FtpApp{
                             ui.separator();
                         });
                         strip.cell(|ui|{
-                            self.transfer_table("3", ctx, ui, vec![1 ,2 ,3]);
+                            self.transfer_table("3", ctx, ui);
                         });
                     });
 
@@ -394,6 +406,35 @@ impl FtpApp{
 
                             if typ == FSType::Remote{
                                 if ui.button("Download").clicked() {
+
+                                    if self.local_path != FtpApp::ROOT_FLAG && self.remote_path != FtpApp::ROOT_FLAG{
+
+                                        let remote_path = match get_remote_join_path(&self.sender ,&self.remote_path, &filename){
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
+                                                ui.close_menu();
+                                                return;
+                                            },
+                                        };
+
+                                        let local_path = join_path(vec![self.local_path.clone(), filename.clone()]).unwrap()[0].clone();
+                                        match download_file(&self.sender, &local_path, &remote_path){
+                                            Ok(_) => {
+                                                self.switch = SwitchDock::Transfer;
+                                            },
+                                            Err(e) => {
+                                                msgbox::error(&self.title.to_string(), &format!("download remote file faild : {}" ,e));
+                                                ui.close_menu();
+                                                return;
+                                            },
+                                        };
+                                    } else{
+                                        msgbox::error(&self.title, &"not allow download to root path".to_string());
+                                    }
+
+                                    
+
                                     ui.close_menu();
                                 }
                             } else {
@@ -504,7 +545,7 @@ impl FtpApp{
         });
     }
 
-    fn transfer_table(&mut self,id : &str ,ctx : &egui::Context , ui: &mut egui::Ui , files : Vec<u32>) {
+    fn transfer_table(&mut self,id : &str ,ctx : &egui::Context , ui: &mut egui::Ui) {
         ui.push_id(id, |ui| {
             egui_extras::TableBuilder::new(ui)
             .striped(true)
@@ -524,13 +565,13 @@ impl FtpApp{
                     ui.heading("");
                 });
                 header.col(|ui| {
-                    ui.heading("Name");
-                });
-                header.col(|ui| {
-                    ui.heading("Type");
+                    ui.heading("Remote Path");
                 });
                 header.col(|ui| {
                     ui.heading("Local Path");
+                });
+                header.col(|ui| {
+                    ui.heading("Type");
                 });
                 header.col(|ui| {
                     ui.heading("Size");
@@ -546,8 +587,8 @@ impl FtpApp{
                 });
             })
             .body(|mut body| {
-
-                for _ in files {
+                let transfer = &*G_TRANSFER.read().unwrap();
+                for i in transfer {
                     let row_height = 20.0;
                     body.row(row_height, |mut row| {
                         
@@ -558,24 +599,24 @@ impl FtpApp{
                         });
 
                         row.col(|ui| {
-                            ui.label("test.txt");
+                            ui.label(&i.remote_path);
                         });
                         row.col(|ui| {
-                            ui.label("Download");
+                            ui.label(&i.local_path);
                         });
                         row.col(|ui| {
-                            ui.label("C:\\test.txt");
+                            ui.label(&i.typ);
                         });
                         row.col(|ui| {
-                            ui.label("10 kb");
-                        });
-
-                        row.col(|ui| {
-                            ui.label("1 kb/s");
+                            ui.label(transfer_size(i.size));
                         });
 
                         row.col(|ui| {
-                            ui.label("10 s");
+                            ui.label(transfer_speed(i.speed));
+                        });
+
+                        row.col(|ui| {
+                            ui.label(format!("{} s" , i.remaind_time));
                         });
 
                         row.col(|ui| {
@@ -657,6 +698,12 @@ fn main() {
                 },
                 FTPId::Close => {
                     std::process::exit(0);
+                },
+                FTPId::Get => {
+
+                },
+                FTPId::Put => {
+                    
                 },
                 FTPId::Unknown => {
     

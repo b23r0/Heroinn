@@ -17,6 +17,18 @@ pub fn transfer_size(size : f64) -> String{
     }
 }
 
+pub fn transfer_speed(size : f64) -> String{
+    if size < 1024.0 {
+        format!("{:.2} Byte/s" , size )
+    } else if size < (1024.0 * 1024.0) {
+        format!("{:.2} KB/s" , size / 1024.0 )
+    } else if size < (1024.0 * 1024.0 * 1024.0) {
+        format!("{:.2} MB/s" , size / (1024.0 * 1024.0) )
+    } else {
+        format!("{:.2} GB/s" , size / (1024.0 * 1024.0 * 1024.0) )
+    }
+}
+
 
 pub fn get_disk_info(_ : Vec<String>) -> Result<Vec<String>>{
     
@@ -100,4 +112,52 @@ pub fn remove_file(param : Vec<String>) -> Result<Vec<String>>{
     let filename = param[0].clone();
     std::fs::remove_file(filename)?;
     Ok(vec![])
+}
+
+pub fn md5_file(param : Vec<String>) -> Result<Vec<String>>{
+
+    let path = param[0].clone();
+
+    let mut f = std::fs::File::open(path)?;
+
+    let end_pos : u64 = param[1].clone().parse::<u64>().unwrap();
+
+	let mut md5_str = String::new();
+
+	let mut md5 = md5::Md5::default();
+
+	let mut buffer = vec![0u8 ; 1024 * 1024 * 20].into_boxed_slice();
+	
+	let mut sum : u64 = 0;
+	loop{
+
+		if (end_pos - sum) <= 1024 * 1024 * 20 {
+
+			let mut last_buf = vec![0u8; (end_pos - sum) as usize].into_boxed_slice();
+			f.read_exact(&mut last_buf)?;
+
+			md5::Digest::update(&mut md5, &last_buf);
+
+			break;
+		}
+
+		let n = f.read(&mut buffer)?;
+		sum += n as u64;
+		md5::Digest::update(&mut md5, &buffer[..n]);
+
+		if n == 0 {
+			break;
+		}
+	}
+
+	for b in md5::Digest::finalize(md5){
+		let a = format!("{:02x}", b);
+		md5_str += &a;
+	}
+
+	Ok(vec![md5_str , f.metadata()?.len().to_string()])
+}
+
+pub fn file_size(param : Vec<String>) -> Result<Vec<String>>{
+    Ok(vec![std::fs::File::open(&param[0])?.metadata()?.len().to_string()])
 }

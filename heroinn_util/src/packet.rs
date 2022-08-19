@@ -10,6 +10,25 @@ struct BasePacket{
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TunnelRequest{
+    pub port : u16
+}
+
+impl TunnelRequest {
+    pub fn parse(data : &Vec<u8>) -> Result<Self>{
+        let ret : TunnelRequest = serde_json::from_slice(data)?;
+        Ok(ret)
+    }
+
+    pub fn serialize(&self) -> Result<Vec<u8>>{
+        match serde_json::to_vec(self){
+            Ok(p) => Ok(p),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "serilize TunnelRequest packet faild"))
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HostInfo{
     pub ip : String,
     pub host_name : String,

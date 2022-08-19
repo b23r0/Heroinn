@@ -5,6 +5,8 @@ use serde::{Serialize, Deserialize};
 
 pub enum FTPId{
     RPC,
+    Get,
+    Put,
     Close,
     Unknown
 }
@@ -13,16 +15,19 @@ impl FTPId{
     pub fn to_u8(&self) -> u8{
         match self{
             FTPId::RPC => 0x01,
-            FTPId::Close => 0x02,
+            FTPId::Get => 0x02,
+            FTPId::Put => 0x03,
+            FTPId::Close => 0x04,
             FTPId::Unknown => 0xff,
-            
         }
     }
 
     pub fn from(id : u8) -> Self{
         match id{
             0x01 => FTPId::RPC,
-            0x02 => FTPId::Close,
+            0x02 => FTPId::Get,
+            0x03 => FTPId::Get,
+            0x04 => FTPId::Close,
             _ => FTPId::Unknown
         }
     }
@@ -42,6 +47,33 @@ pub struct FileInfo{
     pub last_modified : String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FTPGetHeader{
+    pub path : String,
+    pub start_pos : u64
+}
+
+impl FTPGetHeader{
+    pub fn parse(data : &Vec<u8>) -> Result<Self>{
+        let ret : FTPGetHeader = serde_json::from_slice(data)?;
+        Ok(ret)
+    }
+
+    
+    pub fn serialize(&self) -> Result<Vec<u8>>{
+        match serde_json::to_vec(self){
+            Ok(p) => Ok(p),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "serilize FTPGetHeader packet faild"))
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FTPPutHeader{
+    pub path : String,
+    pub start_pos : u64
+}
+
 impl FTPPacket{
     pub fn parse(data : &Vec<u8>) -> Result<Self>{
         let ret : FTPPacket = serde_json::from_slice(data)?;
@@ -51,7 +83,7 @@ impl FTPPacket{
     pub fn serialize(&self) -> Result<Vec<u8>>{
         match serde_json::to_vec(self){
             Ok(p) => Ok(p),
-            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "serilize ftp packet faild"))
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "serilize FTPPacket packet faild"))
         }
     }
 

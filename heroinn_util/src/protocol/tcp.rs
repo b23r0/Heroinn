@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::packet::Message;
 use crate::protocol::TUNNEL_FLAG;
-use crate::{ HeroinnProtocol};
+use crate::{ HeroinnProtocol, cur_timestamp_secs};
 
-use super::{Server, TunnelClient};
+use super::Server;
 use super::Client;
 
 const TCP_MAX_PACKET: u32 = 1024*9999;
@@ -20,17 +20,16 @@ pub struct TcpServer{
 }
 
 pub struct TcpConnection{
-    s : TcpStream,
-    is_tunnel : bool
+    s : TcpStream
 }
 
 impl Clone for TcpConnection{
     fn clone(&self) -> Self {
-        Self { s: self.s.try_clone().unwrap() , is_tunnel:  self.is_tunnel }
+        Self { s: self.s.try_clone().unwrap()}
     }
 }
 
-impl Server<TcpStream> for TcpServer{
+impl Server for TcpServer{
     fn new<
         CBCB: 'static + Fn(Message) + Send + Copy , 
         CB: 'static + Fn(HeroinnProtocol , Vec<u8>, SocketAddr, CBCB) + Send
@@ -242,18 +241,30 @@ impl Server<TcpStream> for TcpServer{
     }
 }
 
-impl Client<TcpStream> for TcpConnection{
+impl Client for TcpConnection{
     fn connect(address : &str) -> std::io::Result<Self> where Self: Sized {
         let address : std::net::SocketAddr = match address.parse(){
             Ok(p) => p,
             Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("address format error : {}", e))),
         };
         let s = TcpStream::connect(address)?;
-        Ok(Self{s , is_tunnel : false})
+        Ok(Self{s})
     }
 
-    fn from(s : TcpStream) -> std::io::Result<Self> where Self: Sized {
-        Ok(Self{s , is_tunnel : false})
+    fn tunnel(remote_addr : &str , server_local_port : u16) -> std::io::Result<Self> where Self: Sized {
+        let remote_addr : SocketAddr = remote_addr.parse().unwrap();
+        
+        log::info!("start tunnel [{}] [{}]", remote_addr , server_local_port);
+        let mut s = TcpStream::connect(remote_addr)?;
+
+        let buf = TUNNEL_FLAG.to_vec();
+        
+        s.write_all(&buf)?;
+        s.write_all(&server_local_port.to_be_bytes().to_vec())?;
+
+        Ok(Self{
+            s
+        })
     }
 
     fn recv(&mut self) -> std::io::Result<Vec<u8>> {
@@ -303,34 +314,29 @@ impl Client<TcpStream> for TcpConnection{
     }
 }
 
-impl TunnelClient for TcpConnection{
-    fn tunnel(remote_addr : &str , server_local_port : u16) -> std::io::Result<Self> where Self: Sized {
-        let remote_addr : SocketAddr = remote_addr.parse().unwrap();
-        
-        log::info!("start tunnel [{}] [{}]", remote_addr , server_local_port);
-        let mut s = TcpStream::connect(remote_addr)?;
+impl TcpConnection{
+    pub fn tunnel_server(server : TcpListener, timeout_secs : u64) -> std::io::Result<(Self , SocketAddr)>{
+        server.set_nonblocking(true).unwrap();
 
-        let buf = TUNNEL_FLAG.to_vec();
-        
-        s.write_all(&buf)?;
-        s.write_all(&server_local_port.to_be_bytes().to_vec())?;
+        let t = cur_timestamp_secs();
 
-        Ok(Self{
-            s,
-            is_tunnel: true,
-        })
-    }
+        loop{
+            let (s, addr) = match server.accept(){
+                Ok(p) => p,
+                Err(e) => {
+                    if cur_timestamp_secs() - t > timeout_secs{
+                        return Err(e);
+                    }
+    
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    continue;
+                },
+            };
 
-    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        self.s.read_exact(buf)
-    }
+            s.set_nonblocking(false).unwrap();
 
-    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.s.write_all(buf)
-    }
-
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.s.read(buf)
+            return Ok((Self{s} , addr));
+        }
     }
 }
 
@@ -350,24 +356,23 @@ impl Drop for TcpServer{
 fn test_tcp_tunnel(){
 
     let mut server = TcpServer::new(&"127.0.0.1:0", |_ , _ ,_ ,_| {} , |_| {}).unwrap();
-    let server2 = TcpListener::bind(&"127.0.0.1:0").unwrap();
+    let server2 = TcpListener::bind("127.0.0.1:0").unwrap();
+    let remote_local_port = server2.local_addr().unwrap().port();
 
     let remote = &format!("127.0.0.1:{}" , server.local_addr().unwrap().port());
-    let remote_local_port = server2.local_addr().unwrap().port();
     let mut client1 = TcpConnection::tunnel(remote, remote_local_port).unwrap();
 
-    let (mut client2 , _) = server2.accept().unwrap();
+    let (mut client2 , _) = TcpConnection::tunnel_server(server2, 10).unwrap();
 
     for _ in 0..3{
-        let mut buf = [0u8;4];
-        client1.write_all(&[0,1,2,3]).unwrap();
-        client2.read_exact(&mut buf).unwrap();
+
+        client1.send(&mut [0,1,2,3]).unwrap();
+        let buf = client2.recv().unwrap();
         assert!(buf == [0,1,2,3]);
 
-        let mut buf = [0u8;4];
-        client2.write_all(&[5,6,7,8]).unwrap();
-        client1.read_exact(&mut buf).unwrap();
-        assert!(buf == [5,6,7,8]);
+        client1.send(&mut [4,5,6,7]).unwrap();
+        let buf = client2.recv().unwrap();
+        assert!(buf == [4,5,6,7]);
     }
 
     client1.close();
