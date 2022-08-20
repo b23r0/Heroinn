@@ -114,7 +114,7 @@ impl RpcClient{
         let is_closed = Arc::new(AtomicBool::new(false));
         let wait_response_list_1 = wait_response_list.clone();
         let is_closed_1 = is_closed.clone();
-        std::thread::spawn(move || {
+        std::thread::Builder::new().name("rpc client gc worker".to_string()).spawn(move || {
             loop{
                 std::thread::sleep(std::time::Duration::from_secs(RpcClient::RESPONSE_EXPIRED_SECS));
                 if is_closed_1.load(std::sync::atomic::Ordering::Relaxed){
@@ -123,7 +123,7 @@ impl RpcClient{
                 wait_response_list_1.write().unwrap().retain(|_ : &String, v : &mut RpcMessage| cur_timestamp_secs() - v.time < RpcClient::RESPONSE_EXPIRED_SECS);
             }
             log::info!("RpcClient exit");
-        });
+        }).unwrap();
         Self{wait_response_list , is_closed}
     }
 

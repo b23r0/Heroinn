@@ -3,8 +3,6 @@ use std::{sync::{Arc, mpsc::{channel, Sender}, RwLock}};
 use eframe::{egui, App};
 use egui_extras::{Size, StripBuilder};
 use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, rpc::{RpcClient, RpcMessage}, ftp::{method::{transfer_size, join_path, transfer_speed}, FileInfo, FTPPacket, FTPId}, msgbox};
-use log::LevelFilter;
-use simple_logger::SimpleLogger;
 use lazy_static::*;
 
 mod controller;
@@ -37,6 +35,7 @@ impl std::fmt::Debug for FSType{
     }
 }
 
+#[derive(Debug)]
 pub struct TransferInfo{
     pub last_tick : u64,
     pub typ : String,
@@ -552,10 +551,10 @@ impl FtpApp{
             .resizable(true)
             .cell_layout(egui::Layout::left_to_right().with_cross_align(egui::Align::Center))
             .column(Size::initial(50.0).at_least(50.0))
+            .column(Size::initial(220.0).at_least(50.0))
+            .column(Size::initial(220.0).at_least(50.0))
+            .column(Size::initial(80.0).at_least(50.0))
             .column(Size::initial(100.0).at_least(50.0))
-            .column(Size::initial(100.0).at_least(50.0))
-            .column(Size::initial(290.0).at_least(50.0))
-            .column(Size::initial(140.0).at_least(50.0))
             .column(Size::initial(100.0).at_least(50.0))
             .column(Size::initial(150.0).at_least(50.0))
             .column(Size::initial(55.0).at_least(50.0))
@@ -616,7 +615,7 @@ impl FtpApp{
                         });
 
                         row.col(|ui| {
-                            ui.label(format!("{} s" , i.remaind_time));
+                            ui.label(format!("{} s" , i.remaind_time as i64));
                         });
 
                         row.col(|ui| {
@@ -666,8 +665,8 @@ impl FtpApp{
 }
 
 fn main() {
-    SimpleLogger::new().with_utc_timestamps().with_utc_timestamps().with_colors(true).init().unwrap();
-	::log::set_max_level(LevelFilter::Debug);
+    simple_logger::SimpleLogger::new().with_threads(true).with_utc_timestamps().with_colors(true).init().unwrap();
+	::log::set_max_level(log::LevelFilter::Debug);
 
     let args : Vec<String> = std::env::args().collect();
 
@@ -680,7 +679,7 @@ fn main() {
 
     let title = args[2].clone();
 
-    std::thread::spawn(move || {
+    std::thread::Builder::new().name("ftp receiver worker".to_string()).spawn(move || {
         loop{
             let data = match s.recv(){
                 Ok(p) => p,
@@ -711,11 +710,11 @@ fn main() {
             }
 
         }
-    });
+    }).unwrap();
 
     let (sender , receiver) = channel::<FTPPacket>();
 
-    std::thread::spawn(move || {
+    std::thread::Builder::new().name("ftp sender worker".to_string()).spawn(move || {
         loop{
             let msg = match receiver.recv(){
                 Ok(p) => p,
@@ -726,7 +725,7 @@ fn main() {
             log::debug!("ftp send msg to core : {}", msg.id);
             s2.send(&mut msg.serialize().unwrap()).unwrap();
         }
-    });
+    }).unwrap();
 
     let mut options = eframe::NativeOptions::default();
     options.initial_window_size = Some(egui::Vec2::new(1060.0,500.0));

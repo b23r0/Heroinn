@@ -120,7 +120,11 @@ pub fn md5_file(param : Vec<String>) -> Result<Vec<String>>{
 
     let mut f = std::fs::File::open(path)?;
 
-    let end_pos : u64 = param[1].clone().parse::<u64>().unwrap();
+    let end_pos : u64 = if param.len() == 2 { 
+        param[1].clone().parse::<u64>().unwrap() 
+    } else {
+        f.metadata()?.len()
+    };
 
 	let mut md5_str = String::new();
 

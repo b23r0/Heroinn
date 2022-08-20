@@ -3,8 +3,6 @@ use controller::*;
 use eframe::egui::{self};
 use egui_extras::{Size, StripBuilder , TableBuilder};
 use heroinn_util::*;
-use log::LevelFilter;
-use simple_logger::SimpleLogger;
 
 mod controller;
 
@@ -45,8 +43,8 @@ fn doc_link_label<'a>(title: &'a str, search_term: &'a str) -> impl egui::Widget
 }
 
 fn main() {
-    SimpleLogger::new().with_utc_timestamps().with_utc_timestamps().with_colors(true).init().unwrap();
-	::log::set_max_level(LevelFilter::Info);
+    simple_logger::SimpleLogger::new().with_threads(true).with_utc_timestamps().with_colors(true).init().unwrap();
+	::log::set_max_level(log::LevelFilter::Debug);
     
     let mut options = eframe::NativeOptions::default();
     options.initial_window_size = Some(egui::Vec2::new(1375.0,610.0));

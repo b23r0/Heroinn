@@ -141,6 +141,7 @@ pub fn delete_remote_file(sender : &Sender<FTPPacket> ,full_path : &String) -> R
 }
 
 pub fn download_file(sender : &Sender<FTPPacket> , local_path : &String , remote_path : &String) -> Result<()>{
+
     let local_md5 = match md5_file(vec![local_path.to_string()]){
         Ok(p) => p[0].clone(),
         Err(_) => String::new(),
@@ -153,7 +154,7 @@ pub fn download_file(sender : &Sender<FTPPacket> , local_path : &String , remote
 
     let (mut f , total_size) = if !local_md5.is_empty(){
 
-        let f = std::fs::File::open(local_path)?;
+        let f = std::fs::File::options().write(true).open(local_path)?;
 
         let msg = RpcMessage::build_call("md5_file", vec![remote_path.clone() , f.metadata()?.len().to_string() ]);
         send_ftp_packet(&sender ,build_ftp_rpc_packet(&msg)?)?;
@@ -172,6 +173,7 @@ pub fn download_file(sender : &Sender<FTPPacket> , local_path : &String , remote
         };
 
         if remote_md5 == local_md5{
+            log::info!("resume broken transfer");
             header.start_pos = f.metadata()?.len();
         }
 
@@ -215,7 +217,7 @@ pub fn download_file(sender : &Sender<FTPPacket> , local_path : &String , remote
 
     let sender = sender.clone();
     let local_path = local_path.clone();
-    std::thread::spawn(move || {
+    std::thread::Builder::new().name("download file worker".to_string()).spawn(move || {
         let server = TcpListener::bind("127.0.0.1:0").unwrap();
 
         let req = TunnelRequest{
@@ -260,8 +262,12 @@ pub fn download_file(sender : &Sender<FTPPacket> , local_path : &String , remote
                     break;
                 },
             };
+
+            if data.len() == 0{
+                break;
+            }
             
-            match f.write(&data){
+            match f.write_all(&data){
                 Ok(_) => {},
                 Err(e) => {
                     log::error!("write download file faild : {}" , e);
@@ -291,6 +297,7 @@ pub fn download_file(sender : &Sender<FTPPacket> , local_path : &String , remote
                         item.speed = item.remaind_size - (total_size - pos) as f64;
                         item.remaind_size = (total_size - pos) as f64;
                         item.remaind_time = item.remaind_size / item.speed;
+                        log::debug!("{:?}" , item);
                     }
                 }
 
@@ -309,7 +316,7 @@ pub fn download_file(sender : &Sender<FTPPacket> , local_path : &String , remote
         }
 
         log::info!("get file finished");
-    });
+    }).unwrap();
 
     Ok(())
 }

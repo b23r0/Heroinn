@@ -14,5 +14,6 @@ rfd = "0.10.0"
 sysinfo = "0.25.1"
 chrono = "0.4.22"
 path-absolutize = "3.0.13"
-simple_logger = "2.2.0"
-md-5 = "0.9.1"
+simple_logger = { version = "2.2.0" , features = ["threads"]}
+md-5 = "0.10.1"
+net2 = "0.2.35"

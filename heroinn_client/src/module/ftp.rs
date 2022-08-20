@@ -19,6 +19,7 @@ impl Session for FtpClient{
         rpc_server.register(&"join_path".to_string(), join_path);
         rpc_server.register(&"remove_file".to_string(), remove_file);
         rpc_server.register(&"file_size".to_string(), file_size);
+        rpc_server.register(&"md5_file".to_string(), md5_file);
         Ok(Self{
             id: id.clone(),
             clientid: clientid.clone(),

