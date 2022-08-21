@@ -1,4 +1,4 @@
-use std::{sync::{Arc, mpsc::{channel, Sender}, RwLock}};
+use std::{sync::{Arc, mpsc::{channel, Sender}, RwLock}, collections::HashMap};
 
 use eframe::{egui, App};
 use egui_extras::{Size, StripBuilder};
@@ -10,7 +10,7 @@ use controller::*;
 
 lazy_static!{
     static ref G_RPCCLIENT : Arc<RpcClient> = Arc::new(RpcClient::new());
-    static ref G_TRANSFER : Arc<RwLock<Vec<TransferInfo>>> = Arc::new(RwLock::new(vec![]));
+    static ref G_TRANSFER : Arc<RwLock<HashMap<String ,TransferInfo>>> = Arc::new(RwLock::new(HashMap::new()));
 }
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -35,9 +35,8 @@ impl std::fmt::Debug for FSType{
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransferInfo{
-    pub last_tick : u64,
     pub typ : String,
     pub local_path : String,
     pub remote_path : String,
@@ -169,7 +168,7 @@ impl App for FtpApp{
             }
         });
 
-
+        ctx.request_repaint();
     }
 }
 
@@ -432,12 +431,37 @@ impl FtpApp{
                                         msgbox::error(&self.title, &"not allow download to root path".to_string());
                                     }
 
-                                    
-
                                     ui.close_menu();
                                 }
                             } else {
                                 if ui.button("Upload").clicked() {
+
+                                    if self.local_path != FtpApp::ROOT_FLAG && self.remote_path != FtpApp::ROOT_FLAG{
+
+                                        let remote_path = match get_remote_join_path(&self.sender ,&self.remote_path, &filename){
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                msgbox::error(&self.title.to_string(), &format!("join remote path faild : {}" ,e));
+                                                ui.close_menu();
+                                                return;
+                                            },
+                                        };
+
+                                        let local_path = join_path(vec![self.local_path.clone(), filename.clone()]).unwrap()[0].clone();
+                                        match upload_file(&self.sender, &local_path, &remote_path){
+                                            Ok(_) => {
+                                                self.switch = SwitchDock::Transfer;
+                                            },
+                                            Err(e) => {
+                                                msgbox::error(&self.title.to_string(), &format!("download remote file faild : {}" ,e));
+                                                ui.close_menu();
+                                                return;
+                                            },
+                                        };
+                                    } else{
+                                        msgbox::error(&self.title, &"not allow download to root path".to_string());
+                                    }
+
                                     ui.close_menu();
                                 }
                             }
@@ -586,8 +610,11 @@ impl FtpApp{
                 });
             })
             .body(|mut body| {
-                let transfer = &*G_TRANSFER.read().unwrap();
-                for i in transfer {
+                let transfer_lock = G_TRANSFER.read().unwrap();
+                let transfer = HashMap::clone(&transfer_lock);
+                drop(transfer_lock);
+                
+                for ( _ ,i) in transfer {
                     let row_height = 20.0;
                     body.row(row_height, |mut row| {
                         
@@ -620,6 +647,10 @@ impl FtpApp{
 
                         row.col(|ui| {
                             if ui.button("Cancel").clicked(){
+                                let mut transfer = G_TRANSFER.write().unwrap();
+                                if transfer.contains_key(&i.local_path){
+                                    transfer.remove(&i.local_path);
+                                }
                             };
                         });
                     });

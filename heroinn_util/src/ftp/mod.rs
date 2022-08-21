@@ -26,7 +26,7 @@ impl FTPId{
         match id{
             0x01 => FTPId::RPC,
             0x02 => FTPId::Get,
-            0x03 => FTPId::Get,
+            0x03 => FTPId::Put,
             0x04 => FTPId::Close,
             _ => FTPId::Unknown
         }
@@ -71,7 +71,23 @@ impl FTPGetHeader{
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FTPPutHeader{
     pub path : String,
+    pub total_size : u64,
     pub start_pos : u64
+}
+
+impl FTPPutHeader{
+    pub fn parse(data : &Vec<u8>) -> Result<Self>{
+        let ret : FTPPutHeader = serde_json::from_slice(data)?;
+        Ok(ret)
+    }
+
+    
+    pub fn serialize(&self) -> Result<Vec<u8>>{
+        match serde_json::to_vec(self){
+            Ok(p) => Ok(p),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "serilize FTPPutHeader packet faild"))
+        }
+    }
 }
 
 impl FTPPacket{

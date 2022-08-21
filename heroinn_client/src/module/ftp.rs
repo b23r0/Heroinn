@@ -1,5 +1,5 @@
-use std::{sync::{Arc, atomic::AtomicBool, mpsc::Sender}, io::{Seek, SeekFrom, Read}};
-use heroinn_util::{session::{Session, SessionBase, SessionPacket}, rpc::{RpcServer, RpcMessage}, ftp::{method::*, FTPPacket, FTPId, FTPGetHeader}, packet::TunnelRequest, protocol::create_tunnel};
+use std::{sync::{Arc, atomic::AtomicBool, mpsc::Sender}, io::{Seek, SeekFrom, Read, Write}};
+use heroinn_util::{session::{Session, SessionBase, SessionPacket}, rpc::{RpcServer, RpcMessage}, ftp::{method::*, FTPPacket, FTPId, FTPGetHeader, FTPPutHeader}, packet::TunnelRequest, protocol::create_tunnel};
 
 use crate::{G_MASTER_ADDR, G_MASTER_PROTOCOL};
 
@@ -62,12 +62,6 @@ impl Session for FtpClient{
                     self.closed.store(true, std::sync::atomic::Ordering::Relaxed);
                 };
             },
-            FTPId::Close => {
-                self.close();
-            },
-            FTPId::Unknown => {
-
-            },
             FTPId::Get => {
 
                 let packet = TunnelRequest::parse(&packet.data)?;
@@ -99,13 +93,16 @@ impl Session for FtpClient{
                         }
                     };
 
-                    match f.seek(SeekFrom::Start(header.start_pos)){
-                        Ok(p) => p,
-                        Err(e) => {
-                            log::error!("seek file faild : {}" , e);
-                            return;
-                        }
-                    };
+                    if header.start_pos != 0{
+                        match f.seek(SeekFrom::Start(header.start_pos)){
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::error!("seek file faild : {}" , e);
+                                return;
+                            }
+                        };
+                    }
+
                     log::debug!("start get transfer [{}]" , header.path);
                     loop{
                         let mut buf = [0u8 ;1024 * 20];
@@ -116,6 +113,11 @@ impl Session for FtpClient{
                                 break;
                             },
                         };
+
+                        if size == 0{
+                            break;
+                        }
+
                         log::debug!("send file data [{}]" , size);
                         match client.send(&mut buf[..size]){
                             Ok(_) => {},
@@ -124,16 +126,109 @@ impl Session for FtpClient{
                                 break;
                             },
                         };
-
-                        if size == 0{
-                            break;
-                        }
                     }
 
                     log::info!("get file worker finished");
                 });
             },
             FTPId::Put => {
+                let packet = TunnelRequest::parse(&packet.data)?;
+
+                std::thread::spawn(move || {
+                    let mut client = match create_tunnel(&G_MASTER_ADDR , &G_MASTER_PROTOCOL , packet.port){
+                        Ok(p) => p,
+                        Err(e) => {
+                            log::error!("create tunnel faild : {}" , e);
+                            return;
+                        },
+                    };
+                    log::debug!("create tunnel success");
+
+                    let header = match client.recv(){
+                        Ok(p) => p,
+                        Err(e) => {
+                            log::error!("recv get header faild : {}" , e);
+                            return;
+                        },
+                    };
+
+                    let header = match FTPPutHeader::parse(&header){
+                        Ok(p) => p,
+                        Err(e) => {
+                            log::error!("parse get header faild : {}" , e);
+                            return;
+                        },
+                    };
+
+                    let mut f = if header.start_pos == 0{
+                        match std::fs::File::create(&header.path){
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::error!("create remote file faild [{}] : {}" , header.path, e);
+                                return;
+                            },
+                        }
+                    } else {
+                        let mut f = match std::fs::File::options().write(true).open(&header.path){
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::error!("open remote file faild [{}] : {}" , header.path, e);
+                                return;
+                            },
+                        };
+
+                        match f.seek(SeekFrom::Start(header.start_pos)){
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::error!("seek remote file faild [{}] : {}" , header.path, e);
+                                return;
+                            },
+                        };
+                        f
+                    } ;
+
+                    log::debug!("start put transfer [{}]" , header.path);
+                    loop{
+                        let data = match client.recv(){
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::error!("recv data faild from ftp slave : {}" , e);
+                                break;
+                            },
+                        };
+            
+                        if data.len() == 0{
+                            break;
+                        }
+                        
+                        match f.write_all(&data){
+                            Ok(_) => {},
+                            Err(e) => {
+                                log::error!("write download file faild : {}" , e);
+                                break;
+                            },
+                        };
+                        log::debug!("recv transfer data [{}]" , data.len());
+                        let pos = match f.stream_position(){
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::error!("get localfile size faild : {}" , e);
+                                break;
+                            },
+                        };
+            
+                        if pos >= header.total_size{
+                            break;
+                        }
+                    }
+                });
+
+                
+            },
+            FTPId::Close => {
+                self.close();
+            },
+            FTPId::Unknown => {
 
             },
         }
