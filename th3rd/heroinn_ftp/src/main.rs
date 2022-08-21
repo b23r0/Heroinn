@@ -505,9 +505,6 @@ impl FtpApp{
                                 
                                 ui.close_menu();
                             }
-                            if ui.button("Properties").clicked() {
-                                ui.close_menu();
-                            }
                         }
                     };
 

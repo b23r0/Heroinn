@@ -66,6 +66,8 @@ impl Session for FtpClient{
 
                 let packet = TunnelRequest::parse(&packet.data)?;
 
+                let closed = self.closed.clone();
+
                 std::thread::spawn(move || {
                     let mut client = match create_tunnel(&G_MASTER_ADDR , &G_MASTER_PROTOCOL , packet.port){
                         Ok(p) => p,
@@ -105,6 +107,12 @@ impl Session for FtpClient{
 
                     log::debug!("start get transfer [{}]" , header.path);
                     loop{
+
+                        if closed.load(std::sync::atomic::Ordering::Relaxed){
+                            log::error!("session closed");
+                            break;
+                        }
+
                         let mut buf = [0u8 ;1024 * 20];
                         let size = match f.read(&mut buf){
                             Ok(p) => p,
@@ -133,7 +141,8 @@ impl Session for FtpClient{
             },
             FTPId::Put => {
                 let packet = TunnelRequest::parse(&packet.data)?;
-
+                let closed = self.closed.clone();
+                
                 std::thread::spawn(move || {
                     let mut client = match create_tunnel(&G_MASTER_ADDR , &G_MASTER_PROTOCOL , packet.port){
                         Ok(p) => p,
@@ -189,6 +198,12 @@ impl Session for FtpClient{
 
                     log::debug!("start put transfer [{}]" , header.path);
                     loop{
+                        
+                        if closed.load(std::sync::atomic::Ordering::Relaxed){
+                            log::error!("session closed");
+                            break;
+                        }
+
                         let data = match client.recv(){
                             Ok(p) => p,
                             Err(e) => {
