@@ -8,6 +8,16 @@ pub mod msgbox;
 pub const HEART_BEAT_TIME : u64 = 5;
 
 #[derive(Debug,PartialEq)]
+pub struct ConnectionInfo{
+    pub flag : u64,
+    pub protocol : u8,
+    pub address_size : u16,
+    pub address : [u8;255],
+    pub remark_size : u16,
+    pub remark : [u8;255],
+}
+
+#[derive(Debug,PartialEq)]
 pub enum HeroinnClientMsgID{
     HostInfo,
     Heartbeat,
@@ -66,7 +76,24 @@ impl HeroinnServerCommandID{
 
 #[derive(Debug,Clone,PartialEq)]
 pub enum HeroinnProtocol{
-    TCP
+    TCP,
+    Unknow
+}
+
+impl HeroinnProtocol{
+    pub fn to_u8(&self) -> u8{
+        match self{
+            HeroinnProtocol::TCP => 0x00,
+            HeroinnProtocol::Unknow => 0xff,
+        }
+    }
+
+    pub fn from(v : u8) -> Self{
+        match v{
+            0x00 => HeroinnProtocol::TCP,
+            _ => HeroinnProtocol::Unknow,
+        }
+    }
 }
 
 pub fn cur_timestamp_millis() -> u128{

@@ -1,7 +1,7 @@
 use std::{sync::{Arc, atomic::AtomicBool, mpsc::Sender}, io::{Seek, SeekFrom, Read, Write}};
 use heroinn_util::{session::{Session, SessionBase, SessionPacket}, rpc::{RpcServer, RpcMessage}, ftp::{method::*, FTPPacket, FTPId, FTPGetHeader, FTPPutHeader}, packet::TunnelRequest, protocol::create_tunnel};
 
-use crate::{G_MASTER_ADDR, G_MASTER_PROTOCOL};
+use crate::{G_DEFAULT_MASTER_ADDR, G_DEFAULT_MASTER_PROTOCOL};
 
 pub struct FtpClient{
     id : String,
@@ -69,7 +69,7 @@ impl Session for FtpClient{
                 let closed = self.closed.clone();
 
                 std::thread::spawn(move || {
-                    let mut client = match create_tunnel(&G_MASTER_ADDR , &G_MASTER_PROTOCOL , packet.port){
+                    let mut client = match create_tunnel(&G_DEFAULT_MASTER_ADDR , &G_DEFAULT_MASTER_PROTOCOL , packet.port){
                         Ok(p) => p,
                         Err(e) => {
                             log::error!("create tunnel faild : {}" , e);
@@ -144,7 +144,7 @@ impl Session for FtpClient{
                 let closed = self.closed.clone();
                 
                 std::thread::spawn(move || {
-                    let mut client = match create_tunnel(&G_MASTER_ADDR , &G_MASTER_PROTOCOL , packet.port){
+                    let mut client = match create_tunnel(&G_DEFAULT_MASTER_ADDR , &G_DEFAULT_MASTER_PROTOCOL , packet.port){
                         Ok(p) => p,
                         Err(e) => {
                             log::error!("create tunnel faild : {}" , e);

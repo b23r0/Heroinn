@@ -36,18 +36,21 @@ impl HeroinnServer{
                     Err(e) => Err(e),
                 }
             },
+            HeroinnProtocol::Unknow => todo!(),
         }
     }
     
     pub fn sendto(&mut self, peer_addr : &SocketAddr, buf : & [u8]) -> Result<()>{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().sendto(peer_addr, buf),
+            HeroinnProtocol::Unknow => todo!(),
         }
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr>{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_ref().unwrap().local_addr(),
+            HeroinnProtocol::Unknow => todo!(),
         }
     }
 
@@ -58,12 +61,14 @@ impl HeroinnServer{
     pub fn contains_addr(&mut self , peer_addr : &SocketAddr) -> bool{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().contains_addr(peer_addr),
+            HeroinnProtocol::Unknow => todo!(),
         }
     }
 
     pub fn close(&mut self){
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().close(),
+            HeroinnProtocol::Unknow => todo!(),
         }
     }
 }

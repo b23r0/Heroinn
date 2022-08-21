@@ -1,6 +1,6 @@
 
 pub mod tcp;
-use std::{io::*, net::SocketAddr};
+use std::{io::*, net::SocketAddr, ops::{Deref, DerefMut}};
 
 use crate::{HeroinnProtocol, packet::Message};
 
@@ -33,10 +33,65 @@ pub trait Server {
     fn close(&mut self);
 }
 
+pub struct ClientWrapper{
+    typ : HeroinnProtocol,
+    tcp_client : Option<TcpConnection>,
+}
+
+impl Deref for ClientWrapper{
+    type Target = dyn Client;
+
+    fn deref(&self) -> &Self::Target {
+        match self.typ{
+            HeroinnProtocol::TCP => {
+                self.tcp_client.as_ref().unwrap()
+            },
+            HeroinnProtocol::Unknow => panic!("unknow protocol"),
+        }
+    }
+}
+
+impl DerefMut for ClientWrapper{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self.typ{
+            HeroinnProtocol::TCP => {
+                self.tcp_client.as_mut().unwrap()
+            },
+            HeroinnProtocol::Unknow => panic!("unknow protocol"),
+        }
+    }
+}
+
+impl Clone for ClientWrapper{
+    fn clone(&self) -> Self {
+        Self { typ: self.typ.clone(), tcp_client: self.tcp_client.clone() }
+    }
+}
+
+impl ClientWrapper{
+    pub fn connect(typ : &HeroinnProtocol , address : &str) -> Result<Self>{
+        match typ{
+            HeroinnProtocol::TCP => {
+                let client = TcpConnection::connect(address)?;
+                Ok(Self{
+                    typ : typ.clone(),
+                    tcp_client : Some(client)
+                })
+            },
+            HeroinnProtocol::Unknow => {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData ,"invaild protocol type"));
+            },
+        }
+    }
+}
+
 pub fn create_tunnel(addr : &str , protocol : &HeroinnProtocol , server_local_port : u16) -> Result<Box<dyn Client>>{
     Ok(match protocol{
         HeroinnProtocol::TCP => {
             Box::new(TcpConnection::tunnel(addr, server_local_port)?)
+        },
+        HeroinnProtocol::Unknow => {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"));
         },
     })
 }

