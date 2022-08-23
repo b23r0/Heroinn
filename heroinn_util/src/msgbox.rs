@@ -16,7 +16,7 @@ pub fn error(title : &String , desc : &String){
     msg.show();
 }
 
-pub fn _info(title : &String , desc : &String){
+pub fn info(title : &String , desc : &String){
     let mut msg = rfd::MessageDialog::new();
     msg = msg.set_level(rfd::MessageLevel::Info);
     msg = msg.set_title(title);

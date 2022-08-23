@@ -756,7 +756,7 @@ fn main() {
     }).unwrap();
 
     let mut options = eframe::NativeOptions::default();
-    options.initial_window_size = Some(egui::Vec2::new(1060.0,500.0));
+    options.initial_window_size = Some(egui::Vec2::new(1070.0,500.0));
     eframe::run_native(
         &format!("Heroinn FTP - {}", title),
         options,
