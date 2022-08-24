@@ -1,5 +1,6 @@
 
 pub mod tcp;
+pub mod http;
 use std::{io::*, net::SocketAddr, ops::{Deref, DerefMut}};
 
 use crate::{HeroinnProtocol, packet::Message};

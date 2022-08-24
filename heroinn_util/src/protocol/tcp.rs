@@ -348,8 +348,8 @@ fn test_tcp_tunnel(){
         let buf = client2.recv().unwrap();
         assert!(buf == [0,1,2,3]);
 
-        client1.send(&mut [4,5,6,7]).unwrap();
-        let buf = client2.recv().unwrap();
+        client2.send(&mut [4,5,6,7]).unwrap();
+        let buf = client1.recv().unwrap();
         assert!(buf == [4,5,6,7]);
     }
 }
