@@ -22,12 +22,13 @@ pub struct TcpServer{
 }
 
 pub struct TcpConnection{
-    s : Option<TcpStream>
+    s : Option<TcpStream>,
+    closed : Arc<AtomicBool>,
 }
 
 impl Clone for TcpConnection{
     fn clone(&self) -> Self {
-        Self { s: Some(self.s.as_ref().unwrap().try_clone().unwrap()) }
+        Self { s: Some(self.s.as_ref().unwrap().try_clone().unwrap()) , closed : self.closed.clone() }
     }
 }
 
@@ -199,7 +200,7 @@ impl Client for TcpConnection{
             Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("address format error : {}", e))),
         };
         let s = TcpStream::connect(address)?;
-        Ok(Self{s : Some(s)})
+        Ok(Self{s : Some(s) , closed : Arc::new(AtomicBool::new(false))})
     }
 
     fn tunnel(remote_addr : &str , server_local_port : u16) -> std::io::Result<Self> where Self: Sized {
@@ -213,12 +214,14 @@ impl Client for TcpConnection{
         s.write_all(&buf)?;
         s.write_all(&server_local_port.to_be_bytes().to_vec())?;
 
-        Ok(Self{
-            s : Some(s)
-        })
+        Ok(Self{s : Some(s) , closed : Arc::new(AtomicBool::new(false))})
     }
 
     fn recv(&mut self) -> std::io::Result<Vec<u8>> {
+
+        if self.closed.load(Ordering::Relaxed){
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , "socket closed"));
+        }
 
         let mut size_buf = [0u8 ; 4];
 
@@ -245,6 +248,11 @@ impl Client for TcpConnection{
     }
 
     fn send(&mut self,buf : &mut [u8]) -> std::io::Result<()> {
+
+        if self.closed.load(Ordering::Relaxed){
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , "socket closed"));
+        }
+
         let size = buf.len() as u32;
 
         if size > TCP_MAX_PACKET{
@@ -268,6 +276,7 @@ impl Client for TcpConnection{
     }
 
     fn close(&mut self) {
+        self.closed.store(true, Ordering::Relaxed);
         self.s = None;
     }
 
@@ -303,7 +312,7 @@ impl TcpConnection{
 
             s.set_nonblocking(false).unwrap();
 
-            return Ok((Self{s : Some(s)} , addr));
+            return Ok((Self{s : Some(s) , closed : Arc::new(AtomicBool::new(false))} , addr));
         }
     }
 }
@@ -313,11 +322,10 @@ impl Drop for TcpConnection{
 
         if let Some(s) = self.s.as_ref(){
             log::info!("tcp client [{}] dropped" , s.peer_addr().unwrap());
+            self.s = None;
         } else {
             log::info!("tcp client dropped");
         }
-
-        self.close();
     }
 }
 

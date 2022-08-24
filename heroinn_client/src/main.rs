@@ -50,6 +50,8 @@ fn main() {
 
     let config = master_configure();
 
+    log::debug!("master config : {:?}" , config);
+
     loop{
         close_all_session_in_lock!(shell_session_mgr);
 

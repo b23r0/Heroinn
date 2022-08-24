@@ -3,10 +3,12 @@ use std::net::SocketAddr;
 
 pub mod module;
 
+use heroinn_util::protocol::http::WSServer;
 use heroinn_util::{*, protocol::{Server} , protocol::tcp::*, packet::Message};
 
 pub struct HeroinnServer{
     tcp_server : Option<TcpServer>,
+    ws_server : Option<WSServer>,
     protocol : HeroinnProtocol
 }
 
@@ -31,6 +33,17 @@ impl HeroinnServer{
                 match TcpServer::new(format!("0.0.0.0:{}" , port).as_str() , HeroinnServer::cb_connection , cb_msg){
                     Ok(tcp_server) => Ok(Self{
                         tcp_server: Some(tcp_server) , 
+                        ws_server : None,
+                        protocol
+                    }),
+                    Err(e) => Err(e),
+                }
+            },
+            HeroinnProtocol::HTTP => {
+                match WSServer::new(format!("0.0.0.0:{}" , port).as_str() , HeroinnServer::cb_connection , cb_msg){
+                    Ok(ws_server) => Ok(Self{
+                        tcp_server:  None, 
+                        ws_server : Some(ws_server),
                         protocol
                     }),
                     Err(e) => Err(e),
@@ -43,6 +56,7 @@ impl HeroinnServer{
     pub fn sendto(&mut self, peer_addr : &SocketAddr, buf : & [u8]) -> Result<()>{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().sendto(peer_addr, buf),
+            HeroinnProtocol::HTTP => self.ws_server.as_mut().unwrap().sendto(peer_addr, buf),
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }
@@ -50,6 +64,7 @@ impl HeroinnServer{
     pub fn local_addr(&self) -> Result<SocketAddr>{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_ref().unwrap().local_addr(),
+            HeroinnProtocol::HTTP => self.ws_server.as_ref().unwrap().local_addr(),
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }
@@ -61,6 +76,7 @@ impl HeroinnServer{
     pub fn contains_addr(&mut self , peer_addr : &SocketAddr) -> bool{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().contains_addr(peer_addr),
+            HeroinnProtocol::HTTP => self.ws_server.as_mut().unwrap().contains_addr(peer_addr),
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }
@@ -68,6 +84,7 @@ impl HeroinnServer{
     pub fn close(&mut self){
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().close(),
+            HeroinnProtocol::HTTP => self.ws_server.as_mut().unwrap().close(),
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }

@@ -152,6 +152,7 @@ impl HeroinnServerCommandID{
 #[derive(Debug,Clone,PartialEq)]
 pub enum HeroinnProtocol{
     TCP,
+    HTTP,
     Unknow
 }
 
@@ -159,6 +160,7 @@ impl HeroinnProtocol{
     pub fn to_u8(&self) -> u8{
         match self{
             HeroinnProtocol::TCP => 0x00,
+            HeroinnProtocol::HTTP => 0x01,
             HeroinnProtocol::Unknow => 0xff,
         }
     }
@@ -166,6 +168,7 @@ impl HeroinnProtocol{
     pub fn from(v : u8) -> Self{
         match v{
             0x00 => HeroinnProtocol::TCP,
+            0x01 => HeroinnProtocol::HTTP,
             _ => HeroinnProtocol::Unknow,
         }
     }

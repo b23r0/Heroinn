@@ -10,7 +10,7 @@ pub fn master_configure() -> ConnectionInfo{
 
     if size == 0{
         return ConnectionInfo{
-            protocol : HeroinnProtocol::TCP.to_u8(),
+            protocol : HeroinnProtocol::HTTP.to_u8(),
             address : String::from("127.0.0.1:8000"),
             remark : String::from("Default"),
         };

@@ -1,5 +1,5 @@
-use std::{net::{SocketAddr, TcpStream}, sync::{Arc, Mutex, atomic::AtomicBool, mpsc::channel}, collections::HashMap};
-use websocket::{OwnedMessage, sync::{Writer}};
+use std::{net::{SocketAddr, TcpStream}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, collections::HashMap};
+use websocket::{OwnedMessage, sync::{Writer, Reader}};
 use crate::{HeroinnProtocol, protocol::{TUNNEL_FLAG, tcp::TcpConnection}};
 use super::{Server, Client};
 
@@ -10,7 +10,10 @@ pub struct WSServer{
 }
 
 pub struct WSConnection{
-    s : Option<websocket::sync::Client<TcpStream>>
+    reader : Option<Arc<Mutex<Reader<TcpStream>>>>,
+    writer : Option<Arc<Mutex<Writer<TcpStream>>>>,
+    local_addr : SocketAddr,
+    closed : Arc<AtomicBool>,
 }
 
 impl Server for WSServer{
@@ -95,48 +98,10 @@ impl Server for WSServer{
                                             },
                                         };
 
-                                        let (tx1, rx1) = channel::<Vec<u8>>();
-                                        let (tx2, rx2) = channel::<Vec<u8>>();
-
-                                        std::thread::Builder::new().name(format!("ws sender worker1")).spawn(move || {
-
-                                            loop{
-                                                let buf = match rx1.recv(){
-                                                    Ok(p) => p,
-                                                    Err(_) => break,
-                                                };
-
-                                                if let Err(e) = sender.send_message(&OwnedMessage::Binary(buf)){
-                                                    log::error!("ws sender error : {}" , e);
-                                                    break;
-                                                };
-                                            }
-
-                                            log::debug!("ws sender worker1!");
-                                        }).unwrap();
-
                                         let mut tunnel_client_1 = tunnel_client.clone();
-                                        std::thread::Builder::new().name(format!("ws sender worker2")).spawn(move || {
-
+                                        std::thread::Builder::new().name(format!("ws tunnel worker1 : {}" , tunnel_client.local_addr().unwrap())).spawn(move || {
                                             loop{
-                                                let mut buf = match rx2.recv(){
-                                                    Ok(p) => p,
-                                                    Err(_) => break,
-                                                };
-
-                                                if let Err(e) = tunnel_client_1.send(&mut buf){
-                                                    log::error!("ws sender error : {}" , e);
-                                                    break;
-                                                };
-                                            }
-
-                                            log::debug!("ws sender worker2!");
-                                        }).unwrap();
-
-                                        let mut tunnel_client_2 = tunnel_client.clone();
-                                        std::thread::Builder::new().name(format!("ws receiver worker1 : {}" , tunnel_client.local_addr().unwrap())).spawn(move || {
-                                            loop{
-                                                let buf = match tunnel_client_2.recv(){
+                                                let buf = match tunnel_client_1.recv(){
                                                     Ok(p) => p,
                                                     Err(e) => {
                                                         log::error!("tunnel read faild : {}" , e);
@@ -144,19 +109,24 @@ impl Server for WSServer{
                                                     },
                                                 };
 
-                                                if let Err(e) = tx1.send(buf){
+                                                if buf.is_empty(){
+                                                    break;
+                                                }
+
+                                                if let Err(e) = sender.send_message(&OwnedMessage::Binary(buf)){
                                                     log::error!("ws sender error : {}" , e);
                                                     break;
                                                 }
                                                 
                                             }
-                                            log::debug!("receiver worker1 finished!");
+                                            log::debug!("ws tunnel1 finished!");
                                         }).unwrap();
 
-                                        std::thread::Builder::new().name(format!("ws receiver worker2 : {}" , tunnel_client.local_addr().unwrap())).spawn(move || {
+                                        let mut tunnel_client_2 = tunnel_client.clone();
+                                        std::thread::Builder::new().name(format!("ws tunnel worker2 : {}" , tunnel_client.local_addr().unwrap())).spawn(move || {
                                             
                                             loop{
-                                                let buf = match receiver.recv_message(){
+                                                let mut buf = match receiver.recv_message(){
                                                     Ok(p) => match p{
                                                         OwnedMessage::Binary(p) => p,
                                                         OwnedMessage::Close(_) => {
@@ -170,20 +140,20 @@ impl Server for WSServer{
                                                     },
                                                 };
 
-                                                if let Err(e) = tx2.send(buf){
+                                                if let Err(e) = tunnel_client_2.send(&mut buf){
                                                     log::error!("ws sender error : {}" , e);
                                                     break;
                                                 }
                                             }
                                             
-                                            log::debug!("receiver worker2 finished!");
+                                            log::debug!("ws tunnel2 finished!");
                                         }).unwrap();
 
                                         break;
                                     }
                                 }
 
-                                cb_data.lock().unwrap()(HeroinnProtocol::TCP , buf, remote_addr, cbcb);
+                                cb_data.lock().unwrap()(HeroinnProtocol::HTTP , buf, remote_addr, cbcb);
                             }
                             _ => {},
                         }
@@ -241,7 +211,7 @@ impl Drop for WSServer{
 impl Client for WSConnection{
     fn connect(address : &str) -> std::io::Result<Self> where Self: Sized {
 
-        let s = match websocket::ClientBuilder::new(&format!("ws:://{}" , address))
+        let s = match websocket::ClientBuilder::new(&format!("ws://{}" , address))
 		.unwrap()
 		.connect_insecure(){
             Ok(p) => p,
@@ -250,8 +220,15 @@ impl Client for WSConnection{
             },
         };
 
+        let local_addr = s.local_addr().unwrap();
+
+        let (reader , writer) = s.split().unwrap();
+
         Ok(Self{
-            s : Some(s)
+            reader : Some(Arc::new(Mutex::new(reader))),
+            writer : Some(Arc::new(Mutex::new(writer))),
+            closed : Arc::new(AtomicBool::new(false)),
+            local_addr
         })
     }
 
@@ -267,11 +244,19 @@ impl Client for WSConnection{
             },
         };
 
+        let local_addr = s.local_addr().unwrap();
+
         let mut buf = TUNNEL_FLAG.to_vec();
         buf.append(&mut server_local_port.to_be_bytes().to_vec());
 
+        let (reader , writer) = s.split().unwrap();
+
         let mut ret = Self{
-            s : Some(s)
+            reader : Some(Arc::new(Mutex::new(reader))),
+            writer : Some(Arc::new(Mutex::new(writer))),
+            closed : Arc::new(AtomicBool::new(false)),
+            local_addr
+            
         };
 
         ret.send(&mut buf)?;
@@ -280,18 +265,26 @@ impl Client for WSConnection{
     }
 
     fn recv(&mut self) -> std::io::Result<Vec<u8>> {
-        let s = match self.s.as_mut(){
+
+        if self.closed.load(Ordering::Relaxed){
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , "socket closed"));
+        }
+
+        let s = match self.reader.as_mut(){
             Some(p) => p,
             None => {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , "socket closed"));
             },
         };
 
-        match s.recv_message(){
+        let mut s_lock = s.lock().unwrap();
+
+        match s_lock.recv_message(){
             Ok(msg) => {
                 match msg{
                     OwnedMessage::Binary(buf) => return Ok(buf),
                     OwnedMessage::Close(_) => {
+                        drop(s_lock);
                         self.close();
                         return Err(std::io::Error::new(std::io::ErrorKind::Interrupted , format!("ws closed")));
                     }
@@ -305,7 +298,12 @@ impl Client for WSConnection{
     }
 
     fn send(&mut self,buf : &mut [u8]) -> std::io::Result<()> {
-        let s = match self.s.as_mut(){
+
+        if self.closed.load(Ordering::Relaxed){
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , "socket closed"));
+        }
+
+        let s = match self.writer.as_mut(){
             Some(p) => p,
             None => {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , "socket closed"));
@@ -313,30 +311,33 @@ impl Client for WSConnection{
         };
 
         let msg = OwnedMessage::Binary(buf.to_vec());
-        if let Err(e) = s.send_message(&msg){
+        if let Err(e) = s.lock().unwrap().send_message(&msg){
             return Err(std::io::Error::new(std::io::ErrorKind::Interrupted , format!("ws send msg error : {}", e)));
         };
         Ok(())
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        let s = match self.s.as_ref(){
-            Some(p) => p,
-            None => {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , "socket closed"));
-            },
-        };
-        s.local_addr()
+        Ok(self.local_addr.clone())
     }
 
     fn close(&mut self) {
-        self.s = None;
+        self.closed.store(true, Ordering::Relaxed);
+        self.reader = None;
+        self.writer = None;
+    }
+}
+
+impl Clone for WSConnection{
+    fn clone(&self) -> Self {
+        Self { reader : self.reader.clone() , writer : self.writer.clone() , closed : self.closed.clone() , local_addr : self.local_addr.clone() }
     }
 }
 
 impl Drop for WSConnection{
     fn drop(&mut self) {
-        self.close();
+        self.reader = None;
+        self.writer = None;
     }
 }
 

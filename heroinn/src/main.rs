@@ -166,6 +166,7 @@ impl HeroinnApp {
                                     .selected_text(format!("{:?}", self.combox_listen_protocol))
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, "TCP");
+                                        ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::HTTP, "HTTP");
                                     });
                                 });
                                 strip.cell(|ui|{
@@ -233,6 +234,7 @@ impl HeroinnApp {
                                 .width(280.0)
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, format!("{:?}" , HeroinnProtocol::TCP));
+                                    ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::HTTP, format!("{:?}" , HeroinnProtocol::HTTP));
                                 });
                                 ui.end_row();
 
@@ -309,7 +311,7 @@ impl HeroinnApp {
     fn listen_table(&mut self,ctx: &egui::Context , ui: &mut egui::Ui) {
         TableBuilder::new(ui)
             .striped(true)
-            .cell_layout(egui::Layout::left_to_right().with_cross_align(egui::Align::Center))
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Size::initial(320.0).at_least(50.0))
             .column(Size::initial(320.0).at_least(50.0))
             .column(Size::initial(100.0).at_least(50.0))
@@ -374,7 +376,7 @@ impl HeroinnApp {
     fn host_table(&mut self,ctx: &egui::Context , ui: &mut egui::Ui) {
         TableBuilder::new(ui)
             .striped(true)
-            .cell_layout(egui::Layout::left_to_right().with_cross_align(egui::Align::Center))
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Size::initial(50.0).at_least(50.0))
             .column(Size::initial(120.0).at_least(50.0))
             .column(Size::initial(150.0).at_least(50.0))

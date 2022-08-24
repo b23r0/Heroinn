@@ -6,8 +6,8 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-eframe = "0.18"
-egui_extras = {version = "0.18" , features = ["image"]}
+eframe = "0.19.0"
+egui_extras = {version = "0.19.0" , features = ["image"]}
 image = { version = "0.24", features = ["jpeg", "png", "ico"] }
 heroinn_util = {path = "../heroinn_util"}
 heroinn_core = {path = "../heroinn_core"}

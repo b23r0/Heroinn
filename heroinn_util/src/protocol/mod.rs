@@ -5,7 +5,7 @@ use std::{io::*, net::SocketAddr, ops::{Deref, DerefMut}};
 
 use crate::{HeroinnProtocol, packet::Message};
 
-use self::tcp::TcpConnection;
+use self::{tcp::TcpConnection, http::WSConnection};
 
 static TUNNEL_FLAG : [u8;4] = [0x38, 0x38 , 0x38, 0x38];
 
@@ -37,6 +37,7 @@ pub trait Server {
 pub struct ClientWrapper{
     typ : HeroinnProtocol,
     tcp_client : Option<TcpConnection>,
+    http_client : Option<WSConnection>,
 }
 
 impl Deref for ClientWrapper{
@@ -46,6 +47,9 @@ impl Deref for ClientWrapper{
         match self.typ{
             HeroinnProtocol::TCP => {
                 self.tcp_client.as_ref().unwrap()
+            },
+            HeroinnProtocol::HTTP => {
+                self.http_client.as_ref().unwrap()
             },
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
@@ -58,6 +62,9 @@ impl DerefMut for ClientWrapper{
             HeroinnProtocol::TCP => {
                 self.tcp_client.as_mut().unwrap()
             },
+            HeroinnProtocol::HTTP => {
+                self.http_client.as_mut().unwrap()
+            },
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }
@@ -65,7 +72,7 @@ impl DerefMut for ClientWrapper{
 
 impl Clone for ClientWrapper{
     fn clone(&self) -> Self {
-        Self { typ: self.typ.clone(), tcp_client: self.tcp_client.clone() }
+        Self { typ: self.typ.clone(), tcp_client: self.tcp_client.clone(), http_client: self.http_client.clone() }
     }
 }
 
@@ -76,7 +83,16 @@ impl ClientWrapper{
                 let client = TcpConnection::connect(address)?;
                 Ok(Self{
                     typ : typ.clone(),
-                    tcp_client : Some(client)
+                    tcp_client : Some(client),
+                    http_client: None,
+                })
+            },
+            HeroinnProtocol::HTTP => {
+                let client = WSConnection::connect(address)?;
+                Ok(Self{
+                    typ : typ.clone(),
+                    tcp_client : None,
+                    http_client: Some(client),
                 })
             },
             HeroinnProtocol::Unknow => {
@@ -90,6 +106,9 @@ pub fn create_tunnel(addr : &str , protocol : &HeroinnProtocol , server_local_po
     Ok(match protocol{
         HeroinnProtocol::TCP => {
             Box::new(TcpConnection::tunnel(addr, server_local_port)?)
+        },
+        HeroinnProtocol::HTTP => {
+            Box::new(WSConnection::tunnel(addr, server_local_port)?)
         },
         HeroinnProtocol::Unknow => {
             return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"));
