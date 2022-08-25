@@ -122,6 +122,7 @@ impl Session for FtpServer{
                 log::info!("sender close msg error: {}" , e);
             },
         };
+        self.instance.close().unwrap();
         log::info!("ftp session closed");
         self.closed.store(true, std::sync::atomic::Ordering::Relaxed)
     }

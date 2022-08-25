@@ -70,14 +70,18 @@ impl Server for WSServer{
 
                     
                     for message in receiver.incoming_messages() {
-                        let message = message.unwrap();
+                        let message = match message{
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::info!("ws connection incomming msg error : {}", e);
+                                break;
+                            },
+                        };
         
                         match message {
                             OwnedMessage::Close(_) => {
-                                let mut conns = connections_2.lock().unwrap();
-                                conns.remove(&remote_addr);
                                 log::info!("ws connection closed : {}", remote_addr);
-                                return;
+                                break;
                             }
                             OwnedMessage::Binary(buf) => {
 
@@ -158,9 +162,21 @@ impl Server for WSServer{
                             _ => {},
                         }
                     }
+                    connections_2.lock().unwrap().remove(&remote_addr);
+                    log::info!("ws client worker finished");
                 }).unwrap();
             }
 
+            let mut conns = connections_1.lock().unwrap();
+            for i in conns.values_mut(){
+                match i.shutdown_all(){
+                    Ok(_) => {},
+                    Err(_) => {},
+                };
+            }
+
+            conns.clear();
+            
             log::info!("ws main worker finished");
         }).unwrap();
 
