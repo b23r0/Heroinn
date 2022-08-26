@@ -87,8 +87,7 @@ impl Server for WSServer{
 
                                 if buf.len() == 6 {
                                     if buf[..4] == TUNNEL_FLAG{
-                                        let mut conns = connections_2.lock().unwrap();
-                                        let mut sender = conns.remove(&remote_addr).unwrap();
+                                        let mut sender = connections_2.lock().unwrap().remove(&remote_addr).unwrap();
 
                                         let port = [buf[4] , buf[5]];
                                         let port = u16::from_be_bytes(port);

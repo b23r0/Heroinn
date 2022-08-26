@@ -153,6 +153,7 @@ impl HeroinnServerCommandID{
 pub enum HeroinnProtocol{
     TCP,
     HTTP,
+    UDP,
     Unknow
 }
 
@@ -161,6 +162,7 @@ impl HeroinnProtocol{
         match self{
             HeroinnProtocol::TCP => 0x00,
             HeroinnProtocol::HTTP => 0x01,
+            HeroinnProtocol::UDP => 0x02,
             HeroinnProtocol::Unknow => 0xff,
         }
     }
@@ -169,6 +171,7 @@ impl HeroinnProtocol{
         match v{
             0x00 => HeroinnProtocol::TCP,
             0x01 => HeroinnProtocol::HTTP,
+            0x02 => HeroinnProtocol::UDP,
             _ => HeroinnProtocol::Unknow,
         }
     }

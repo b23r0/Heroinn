@@ -167,6 +167,7 @@ impl HeroinnApp {
                                     .show_ui(ui, |ui| {
                                         ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, "TCP");
                                         ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::HTTP, "HTTP");
+                                        ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::UDP, "UDP");
                                     });
                                 });
                                 strip.cell(|ui|{
@@ -235,6 +236,7 @@ impl HeroinnApp {
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, format!("{:?}" , HeroinnProtocol::TCP));
                                     ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::HTTP, format!("{:?}" , HeroinnProtocol::HTTP));
+                                    ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::UDP, format!("{:?}" , HeroinnProtocol::UDP));
                                 });
                                 ui.end_row();
 

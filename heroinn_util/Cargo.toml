@@ -18,3 +18,8 @@ simple_logger = { version = "2.2.0" , features = ["threads"]}
 md-5 = "0.10.1"
 net2 = "0.2.35"
 websocket = "0.26.5"
+bytes = "1.1.0"
+rand = {version = "0.8.5", features = ["std"]}
+rust-raknet = {git = "https://github.com/b23r0/rust-raknet.git"}
+tokio = "1.20.1"
+lazy_static = "1.4.0"

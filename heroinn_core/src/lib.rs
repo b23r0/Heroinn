@@ -4,11 +4,13 @@ use std::net::SocketAddr;
 pub mod module;
 
 use heroinn_util::protocol::http::WSServer;
+use heroinn_util::protocol::udp::UDPServer;
 use heroinn_util::{*, protocol::{Server} , protocol::tcp::*, packet::Message};
 
 pub struct HeroinnServer{
     tcp_server : Option<TcpServer>,
     ws_server : Option<WSServer>,
+    udp_server : Option<UDPServer>,
     protocol : HeroinnProtocol
 }
 
@@ -34,6 +36,7 @@ impl HeroinnServer{
                     Ok(tcp_server) => Ok(Self{
                         tcp_server: Some(tcp_server) , 
                         ws_server : None,
+                        udp_server:  None, 
                         protocol
                     }),
                     Err(e) => Err(e),
@@ -44,6 +47,18 @@ impl HeroinnServer{
                     Ok(ws_server) => Ok(Self{
                         tcp_server:  None, 
                         ws_server : Some(ws_server),
+                        udp_server:  None, 
+                        protocol
+                    }),
+                    Err(e) => Err(e),
+                }
+            },
+            HeroinnProtocol::UDP => {
+                match UDPServer::new(format!("0.0.0.0:{}" , port).as_str() , HeroinnServer::cb_connection , cb_msg){
+                    Ok(udp_server) => Ok(Self{
+                        tcp_server:  None, 
+                        ws_server : None,
+                        udp_server : Some(udp_server),
                         protocol
                     }),
                     Err(e) => Err(e),
@@ -57,6 +72,7 @@ impl HeroinnServer{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().sendto(peer_addr, buf),
             HeroinnProtocol::HTTP => self.ws_server.as_mut().unwrap().sendto(peer_addr, buf),
+            HeroinnProtocol::UDP => self.udp_server.as_mut().unwrap().sendto(peer_addr, buf),
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }
@@ -65,6 +81,7 @@ impl HeroinnServer{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_ref().unwrap().local_addr(),
             HeroinnProtocol::HTTP => self.ws_server.as_ref().unwrap().local_addr(),
+            HeroinnProtocol::UDP => self.udp_server.as_ref().unwrap().local_addr(),
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }
@@ -77,6 +94,7 @@ impl HeroinnServer{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().contains_addr(peer_addr),
             HeroinnProtocol::HTTP => self.ws_server.as_mut().unwrap().contains_addr(peer_addr),
+            HeroinnProtocol::UDP => self.udp_server.as_mut().unwrap().contains_addr(peer_addr),
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }
@@ -85,6 +103,7 @@ impl HeroinnServer{
         match self.protocol{
             HeroinnProtocol::TCP => self.tcp_server.as_mut().unwrap().close(),
             HeroinnProtocol::HTTP => self.ws_server.as_mut().unwrap().close(),
+            HeroinnProtocol::UDP => self.udp_server.as_mut().unwrap().close(),
             HeroinnProtocol::Unknow => panic!("unknow protocol"),
         }
     }
