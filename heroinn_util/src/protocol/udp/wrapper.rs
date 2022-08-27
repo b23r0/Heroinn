@@ -93,7 +93,10 @@ impl RUdpServer {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)));
             }
         };
-        let mut server = RT.block_on(RaknetListener::bind(&address)).unwrap();
+        let mut server = match RT.block_on(RaknetListener::bind(&address)){
+            Ok(p) => p,
+            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)))
+        };
 
         RT.block_on(server.listen());
 

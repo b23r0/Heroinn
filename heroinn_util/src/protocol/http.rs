@@ -25,7 +25,7 @@ impl Server for WSServer{
         cb_data : CB,
         cbcb : CBCB,
     ) -> std::io::Result<Self> where Self: Sized {
-        let mut server = websocket::sync::Server::bind(address).unwrap();
+        let mut server = websocket::sync::Server::bind(address)?;
         server.set_nonblocking(true).unwrap();
 
         let connections : Arc<Mutex<HashMap<SocketAddr , Writer<TcpStream>>>> = Arc::new(Mutex::new(HashMap::new()));
