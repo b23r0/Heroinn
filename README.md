@@ -1,6 +1,8 @@
 # Heroinn
 A cross platform C2/post-exploitation framework implementation by Rust.
 
+_This project is for research and study purposes only, and any illegal behavior using this project has nothing to do with this project._
+
 # Features
 
 * GUI
