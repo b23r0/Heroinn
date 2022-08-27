@@ -234,9 +234,9 @@ impl HeroinnApp {
                                 .selected_text(format!("{:?}", self.combox_generator_protocol))
                                 .width(280.0)
                                 .show_ui(ui, |ui| {
-                                    ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::TCP, format!("{:?}" , HeroinnProtocol::TCP));
-                                    ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::HTTP, format!("{:?}" , HeroinnProtocol::HTTP));
-                                    ui.selectable_value(&mut self.combox_listen_protocol, HeroinnProtocol::UDP, format!("{:?}" , HeroinnProtocol::UDP));
+                                    ui.selectable_value(&mut self.combox_generator_protocol, HeroinnProtocol::TCP, format!("{:?}" , HeroinnProtocol::TCP));
+                                    ui.selectable_value(&mut self.combox_generator_protocol, HeroinnProtocol::HTTP, format!("{:?}" , HeroinnProtocol::HTTP));
+                                    ui.selectable_value(&mut self.combox_generator_protocol, HeroinnProtocol::UDP, format!("{:?}" , HeroinnProtocol::UDP));
                                 });
                                 ui.end_row();
 
@@ -380,8 +380,8 @@ impl HeroinnApp {
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Size::initial(50.0).at_least(50.0))
-            .column(Size::initial(120.0).at_least(50.0))
-            .column(Size::initial(150.0).at_least(50.0))
+            .column(Size::initial(160.0).at_least(50.0))
+            .column(Size::initial(110.0).at_least(50.0))
             .column(Size::initial(150.0).at_least(50.0))
             .column(Size::initial(210.0).at_least(50.0))
             .column(Size::initial(100.0).at_least(50.0))
@@ -398,7 +398,7 @@ impl HeroinnApp {
                     ui.heading("Peer IP");
                 });
                 header.col(|ui| {
-                    ui.heading("Network Card IP");
+                    ui.heading("Whoami");
                 });
                 header.col(|ui| {
                     ui.heading("Host Name");
@@ -463,7 +463,7 @@ impl HeroinnApp {
                         }).context_menu(menu);
 
                         row.col(|ui| {
-                            ui.label(info.info.ip);
+                            ui.label(info.info.whoami);
                         }).context_menu(menu);
                         row.col(|ui| {
                             ui.label(info.info.host_name);

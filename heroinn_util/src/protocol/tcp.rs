@@ -152,6 +152,15 @@ impl Server for TcpServer{
                     },
                 }
             }
+
+            let mut conns = connections_1.lock().unwrap();
+            for i in conns.values_mut(){
+                match i.shutdown(std::net::Shutdown::Both){
+                    Ok(_) => {},
+                    Err(_) => {},
+                };
+            }
+            conns.clear();
             log::info!("server closed");
         }).unwrap();
 

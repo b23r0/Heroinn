@@ -33,6 +33,7 @@ pub struct HostInfo{
     pub ip : String,
     pub host_name : String,
     pub os : String ,
+    pub whoami : String,
     pub remark : String
 }
 
