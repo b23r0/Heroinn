@@ -12,8 +12,10 @@ A cross platform C2/post-exploitation framework implementation by Rust.
 
 # Contributing
 
-1. Fork it
-2. Create your feature branch (`git checkout -b my-new-feature`)
-3. Commit your changes (`git commit -am 'Add some feature'`)
-4. Push to the branch (`git push origin my-new-feature`)
-5. Create new Pull Request
+* Report a BUG
+* Submit an ISSUE about suggestion
+* Submit a improved PR
+* Add an example of using rust-raknet
+* Supplement the documentation on using rust-raknet
+
+Everyone for me, I for everyone.
