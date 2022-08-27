@@ -15,6 +15,6 @@ A cross platform C2/post-exploitation framework implementation by Rust.
 * Report a BUG
 * Submit an ISSUE about suggestion
 * Submit a improved PR
-* Supplement the documentation on using Heroinn
+* Supplement the documentation about using `Heroinn`
 
 Everyone for me, I for everyone.
