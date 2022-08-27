@@ -15,6 +15,6 @@ A cross platform C2/post-exploitation framework implementation by Rust.
 * Report a BUG
 * Submit an ISSUE about suggestion
 * Submit a improved PR
-* Supplement the documentation on using rust-raknet
+* Supplement the documentation on using Heroinn
 
 Everyone for me, I for everyone.
