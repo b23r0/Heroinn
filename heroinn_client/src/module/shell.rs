@@ -38,6 +38,12 @@ pub fn set_termsize(fd : i32 , mut size : Box<libc::winsize>) -> bool {
 	(unsafe {libc::ioctl(fd , libc::TIOCSWINSZ , &mut *size) } as i32) > 0
 }
 
+#[cfg(not(target_os = "windows"))]
+/// Look for a shell in the `$SHELL` environment variable
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+}
+
 impl Session for ShellClient{
 
     #[cfg(target_os = "windows")]
@@ -141,7 +147,7 @@ impl Session for ShellClient{
         let master = ends.master;
         let slave = ends.slave;
     
-        let mut builder = Command::new("bash");
+        let mut builder = Command::new(default_shell());
 
         let child_pid;
         let closed_2 = closed.clone();

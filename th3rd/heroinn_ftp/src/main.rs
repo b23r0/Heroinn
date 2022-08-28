@@ -1,3 +1,4 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use std::{sync::{Arc, mpsc::{channel, Sender}, RwLock}, collections::HashMap};
 
 use eframe::{egui, App};
@@ -693,8 +694,12 @@ impl FtpApp{
 }
 
 fn main() {
-    simple_logger::SimpleLogger::new().with_threads(true).with_utc_timestamps().with_colors(true).init().unwrap();
-	::log::set_max_level(log::LevelFilter::Debug);
+
+    #[cfg(debug_assertions)]
+    {
+        simple_logger::SimpleLogger::new().with_threads(true).with_utc_timestamps().with_colors(true).init().unwrap();
+        ::log::set_max_level(log::LevelFilter::Debug);
+    }
 
     let args : Vec<String> = std::env::args().collect();
 

@@ -1,14 +1,16 @@
 use heroinn_util::{ConnectionInfo, HeroinnProtocol};
 
-use crate::G_CONNECTION_INFO;
+use crate::{G_DNA};
 
 pub fn master_configure() -> ConnectionInfo{
 
-    let size = u64::from_be_bytes(G_CONNECTION_INFO.size);
+    let size = u64::from_be_bytes(G_DNA.size);
 
-    //log::debug!("master configure : {:?} [{}]" , G_CONNECTION_INFO , size);
-
+    // if not write the line , flag will be compiler optimized.
+    log::trace!("flag : {:?}" ,G_DNA.flag);
+    
     if size == 0{
+        log::debug!("use default config");
         return ConnectionInfo{
             protocol : HeroinnProtocol::UDP.to_u8(),
             address : String::from("127.0.0.1:8000"),
@@ -21,7 +23,7 @@ pub fn master_configure() -> ConnectionInfo{
         std::process::exit(0);
     }
 
-    let config = match ConnectionInfo::parse(&G_CONNECTION_INFO.data[..size as usize].to_vec()){
+    let config = match ConnectionInfo::parse(&G_DNA.data[..size as usize].to_vec()){
         Ok(p) => p,
         Err(_) => {
             log::error!("parse master connection info faild");

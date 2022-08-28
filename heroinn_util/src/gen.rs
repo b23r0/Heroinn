@@ -31,7 +31,9 @@ pub fn replace_connection_info_to_new_file(path : &String , new_path : &String ,
             break;
         }
 
-        size -= 8;
+        cursor.seek(SeekFrom::Current(-7))?;
+
+        size -= 1;
     }
 
     if !found{
