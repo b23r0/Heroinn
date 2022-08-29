@@ -41,6 +41,7 @@ fn main() {
         ).unwrap();
     }
 
+    #[cfg(target_os = "windows")]
     #[cfg(not(debug_assertions))]
     hide_console_window();
 
