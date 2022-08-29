@@ -1,7 +1,7 @@
 # Heroinn
 A cross platform C2/post-exploitation framework implementation by Rust.
 
-![image]( https://github.com/b23r0/Heroinn/blob/main/image/ui.jpg)
+![image]( https://github.com/b23r0/Heroinn/blob/master/image/ui.jpg)
 
 _This project is for research and study purposes only, and any illegal behavior using this project has nothing to do with this project._
 
