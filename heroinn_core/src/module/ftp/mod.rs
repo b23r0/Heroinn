@@ -1,4 +1,4 @@
-pub mod ftp_port;
+mod ftp_port;
 use std::env::current_dir;
 use std::sync::{mpsc::Sender, atomic::AtomicBool, Arc};
 use heroinn_util::ftp::{FTPPacket, FTPId};

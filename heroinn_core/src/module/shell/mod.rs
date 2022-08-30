@@ -1,7 +1,10 @@
+mod shell_port;
 use std::sync::{mpsc::Sender, atomic::AtomicBool, Arc};
-
 use heroinn_util::session::{Session, SessionPacket, SessionBase};
-use termport::*;
+use std::env::current_dir;
+use self::shell_port::*;
+
+static MAGIC_FLAG : [u8;2] = [0x37, 0x37];
 
 pub struct ShellServer{
     id : String,
@@ -11,8 +14,6 @@ pub struct ShellServer{
     sender : Sender<SessionBase>
 }
 
-static MAGIC_FLAG : [u8;2] = [0x37, 0x37];
-use std::env::current_dir;
 impl Session for ShellServer{
 
     fn new(sender : Sender<SessionBase> , clientid : &String , peer_addr : &String) -> std::io::Result<Self> {
@@ -24,7 +25,7 @@ impl Session for ShellServer{
         #[cfg(target_os = "windows")]
         let driver_path = current_dir().unwrap().join("heroinn_shell.exe").to_str().unwrap().to_string();
 
-        let term = match new_term(&driver_path , peer_addr){
+        let term = match TermInstance::new(&driver_path , peer_addr){
             Ok(p) => p,
             Err(e) => {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()));
