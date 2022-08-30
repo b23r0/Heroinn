@@ -1,63 +1,84 @@
-use std::{net::SocketAddr, sync::Arc};
-use rust_raknet::*;
 use lazy_static::*;
+use rust_raknet::*;
 use std::io::*;
+use std::{net::SocketAddr, sync::Arc};
 
-lazy_static!{
-    static ref RT : tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+lazy_static! {
+    static ref RT: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
 }
 
 pub struct RUdpServer {
-    server : RaknetListener
+    server: RaknetListener,
 }
 
 pub struct RUdpClient {
-    client : Arc<RaknetSocket>
+    client: Arc<RaknetSocket>,
 }
 
-impl RUdpClient{
-
-    pub fn new(address : String ) -> Result<RUdpClient> {
-        let address : SocketAddr = match address.parse(){
+impl RUdpClient {
+    pub fn new(address: String) -> Result<RUdpClient> {
+        let address: SocketAddr = match address.parse() {
             Ok(p) => p,
             Err(e) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ));
             }
         };
         let client = match match RT.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(3) , RaknetSocket::connect(&address)).await
-        }){
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                RaknetSocket::connect(&address),
+            )
+            .await
+        }) {
             Ok(p) => p,
             Err(e) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ));
             }
-        }{
+        } {
             Ok(p) => p,
             Err(e) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ));
             }
         };
 
-        Ok(RUdpClient{
-            client : Arc::new(client)
+        Ok(RUdpClient {
+            client: Arc::new(client),
         })
     }
 
-    pub fn send(&self ,buf : Vec::<u8>) -> Result<()> {
-        match RT.block_on(self.client.send(&buf , Reliability::ReliableOrdered)){
-            Ok(_) => {},
+    pub fn send(&self, buf: Vec<u8>) -> Result<()> {
+        match RT.block_on(self.client.send(&buf, Reliability::ReliableOrdered)) {
+            Ok(_) => {}
             Err(e) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ));
             }
         };
         Ok(())
     }
 
-    pub fn recv(&self) -> Result<Vec<u8>>{
-        let buf = match RT.block_on(self.client.recv()){
+    pub fn recv(&self) -> Result<Vec<u8>> {
+        let buf = match RT.block_on(self.client.recv()) {
             Ok(p) => p,
             Err(e) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ));
             }
         };
 
@@ -78,49 +99,66 @@ impl RUdpClient{
     }
 }
 
-impl Clone for RUdpClient{
+impl Clone for RUdpClient {
     fn clone(&self) -> Self {
-        Self { client: self.client.clone() }
+        Self {
+            client: self.client.clone(),
+        }
     }
 }
 
 impl RUdpServer {
-
-    pub fn new(address : &String ) -> Result<RUdpServer>{
-        let address : SocketAddr = match address.parse(){
+    pub fn new(address: &String) -> Result<RUdpServer> {
+        let address: SocketAddr = match address.parse() {
             Ok(p) => p,
             Err(e) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ));
             }
         };
-        let mut server = match RT.block_on(RaknetListener::bind(&address)){
+        let mut server = match RT.block_on(RaknetListener::bind(&address)) {
             Ok(p) => p,
-            Err(e) => return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)))
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ))
+            }
         };
 
         RT.block_on(server.listen());
 
-        Ok(RUdpServer{
-            server : server
-        })
+        Ok(RUdpServer { server: server })
     }
 
-    pub fn accept(&mut self, timeout_mills : u64) -> Result<RUdpClient> {
+    pub fn accept(&mut self, timeout_mills: u64) -> Result<RUdpClient> {
         let client = match match RT.block_on(async {
-            tokio::time::timeout(std::time::Duration::from_millis(timeout_mills) , self.server.accept()).await
-        }){
+            tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_mills),
+                self.server.accept(),
+            )
+            .await
+        }) {
             Ok(p) => p,
             Err(e) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut , format!("{:?}", e)));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("{:?}", e),
+                ));
             }
-        }{
+        } {
             Ok(p) => p,
             Err(e) => {
-                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData , format!("{:?}", e)));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("{:?}", e),
+                ));
             }
         };
-        Ok(RUdpClient{
-            client : Arc::new(client)
+        Ok(RUdpClient {
+            client: Arc::new(client),
         })
     }
 
@@ -132,7 +170,7 @@ impl RUdpServer {
         Ok(RT.block_on(self.server.close()).unwrap())
     }
 
-    pub fn setmotd(&mut self , motd : String){
+    pub fn setmotd(&mut self, motd: String) {
         self.server.set_full_motd(motd).unwrap();
     }
 }

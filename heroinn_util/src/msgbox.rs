@@ -1,4 +1,4 @@
-pub fn _warn(title : &String , desc : &String){
+pub fn _warn(title: &String, desc: &String) {
     let mut msg = rfd::MessageDialog::new();
     msg = msg.set_level(rfd::MessageLevel::Warning);
     msg = msg.set_title(title);
@@ -7,7 +7,7 @@ pub fn _warn(title : &String , desc : &String){
     msg.show();
 }
 
-pub fn error(title : &String , desc : &String){
+pub fn error(title: &String, desc: &String) {
     let mut msg = rfd::MessageDialog::new();
     msg = msg.set_level(rfd::MessageLevel::Error);
     msg = msg.set_title(title);
@@ -16,7 +16,7 @@ pub fn error(title : &String , desc : &String){
     msg.show();
 }
 
-pub fn info(title : &String , desc : &String){
+pub fn info(title: &String, desc: &String) {
     let mut msg = rfd::MessageDialog::new();
     msg = msg.set_level(rfd::MessageLevel::Info);
     msg = msg.set_title(title);
