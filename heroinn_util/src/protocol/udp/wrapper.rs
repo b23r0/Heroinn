@@ -82,7 +82,7 @@ impl RUdpClient {
             }
         };
 
-        Ok(buf.into())
+        Ok(buf)
     }
 
     pub fn peer_addr(&self) -> Result<SocketAddr> {
@@ -130,7 +130,7 @@ impl RUdpServer {
 
         RT.block_on(server.listen());
 
-        Ok(RUdpServer { server: server })
+        Ok(RUdpServer { server })
     }
 
     pub fn accept(&mut self, timeout_mills: u64) -> Result<RUdpClient> {
@@ -167,7 +167,8 @@ impl RUdpServer {
     }
 
     pub fn close(&mut self) -> Result<()> {
-        Ok(RT.block_on(self.server.close()).unwrap())
+        RT.block_on(self.server.close()).unwrap();
+        Ok(())
     }
 
     pub fn setmotd(&mut self, motd: String) {

@@ -63,7 +63,7 @@ impl FTPGetHeader {
         match serde_json::to_vec(self) {
             Ok(p) => Ok(p),
             Err(_) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "serilize FTPGetHeader packet faild",
                 ))
@@ -89,7 +89,7 @@ impl FTPPutHeader {
         match serde_json::to_vec(self) {
             Ok(p) => Ok(p),
             Err(_) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "serilize FTPPutHeader packet faild",
                 ))
@@ -108,7 +108,7 @@ impl FTPPacket {
         match serde_json::to_vec(self) {
             Ok(p) => Ok(p),
             Err(_) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "serilize FTPPacket packet faild",
                 ))
@@ -126,7 +126,7 @@ impl FileInfo {
         match serde_json::to_string(&self) {
             Ok(p) => Ok(p),
             Err(e) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("serilize disk info faild : {}", e),
                 ))

@@ -89,7 +89,7 @@ impl Session for FtpServer {
                 match sender_1.send(SessionBase {
                     id: id_1.clone(),
                     clientid: clientid_1.clone(),
-                    packet: packet,
+                    packet,
                 }) {
                     Ok(_) => {}
                     Err(e) => {
@@ -117,7 +117,7 @@ impl Session for FtpServer {
 
     fn write(&mut self, data: &Vec<u8>) -> std::io::Result<()> {
         log::debug!("write msg from ftp client");
-        self.instance.write(&data)
+        self.instance.write(data)
     }
 
     fn alive(&self) -> bool {
@@ -138,7 +138,7 @@ impl Session for FtpServer {
         match self.sender.send(SessionBase {
             id: self.id.clone(),
             clientid: self.clientid.clone(),
-            packet: packet,
+            packet,
         }) {
             Ok(_) => {}
             Err(e) => {

@@ -24,7 +24,7 @@ impl TunnelRequest {
         match serde_json::to_vec(self) {
             Ok(p) => Ok(p),
             Err(_) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "serilize TunnelRequest packet faild",
                 ))

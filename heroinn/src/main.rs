@@ -400,7 +400,7 @@ impl HeroinnApp {
                                                 Ok(_) => {
                                                     msgbox::info(
                                                         &"Generator".to_string(),
-                                                        &format!("Success!"),
+                                                        &"Success!".to_string(),
                                                     );
                                                 }
                                                 Err(e) => {

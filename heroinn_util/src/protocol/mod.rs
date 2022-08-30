@@ -117,10 +117,10 @@ impl ClientWrapper {
                 })
             }
             HeroinnProtocol::Unknow => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "invaild protocol type",
-                ));
+                ))
             }
         }
     }

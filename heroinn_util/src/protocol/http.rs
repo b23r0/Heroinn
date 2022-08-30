@@ -101,111 +101,109 @@ impl Server for WSServer {
                                         break;
                                     }
                                     OwnedMessage::Binary(buf) => {
-                                        if buf.len() == 6 {
-                                            if buf[..4] == TUNNEL_FLAG {
-                                                let mut sender = connections_2
-                                                    .lock()
-                                                    .unwrap()
-                                                    .remove(&remote_addr)
-                                                    .unwrap();
+                                        if buf.len() == 6 && buf[..4] == TUNNEL_FLAG {
+                                            let mut sender = connections_2
+                                                .lock()
+                                                .unwrap()
+                                                .remove(&remote_addr)
+                                                .unwrap();
 
-                                                let port = [buf[4], buf[5]];
-                                                let port = u16::from_be_bytes(port);
+                                            let port = [buf[4], buf[5]];
+                                            let port = u16::from_be_bytes(port);
 
-                                                let full_addr = format!("127.0.0.1:{}", port);
-                                                let tunnel_client =
-                                                    match TcpConnection::connect(&full_addr) {
-                                                        Ok(p) => p,
-                                                        Err(e) => {
+                                            let full_addr = format!("127.0.0.1:{}", port);
+                                            let tunnel_client =
+                                                match TcpConnection::connect(&full_addr) {
+                                                    Ok(p) => p,
+                                                    Err(e) => {
+                                                        log::error!(
+                                                            "tunnel connect faild : {}",
+                                                            e
+                                                        );
+                                                        break;
+                                                    }
+                                                };
+
+                                            let mut tunnel_client_1 = tunnel_client.clone();
+                                            std::thread::Builder::new()
+                                                .name(format!(
+                                                    "ws tunnel worker1 : {}",
+                                                    tunnel_client.local_addr().unwrap()
+                                                ))
+                                                .spawn(move || {
+                                                    loop {
+                                                        let buf = match tunnel_client_1.recv() {
+                                                            Ok(p) => p,
+                                                            Err(e) => {
+                                                                log::error!(
+                                                                    "tunnel read faild : {}",
+                                                                    e
+                                                                );
+                                                                break;
+                                                            }
+                                                        };
+
+                                                        if buf.is_empty() {
+                                                            break;
+                                                        }
+
+                                                        if let Err(e) = sender.send_message(
+                                                            &OwnedMessage::Binary(buf),
+                                                        ) {
                                                             log::error!(
-                                                                "tunnel connect faild : {}",
+                                                                "ws sender error : {}",
                                                                 e
                                                             );
                                                             break;
                                                         }
-                                                    };
+                                                    }
+                                                    log::debug!("ws tunnel1 finished!");
+                                                })
+                                                .unwrap();
 
-                                                let mut tunnel_client_1 = tunnel_client.clone();
-                                                std::thread::Builder::new()
-                                                    .name(format!(
-                                                        "ws tunnel worker1 : {}",
-                                                        tunnel_client.local_addr().unwrap()
-                                                    ))
-                                                    .spawn(move || {
-                                                        loop {
-                                                            let buf = match tunnel_client_1.recv() {
-                                                                Ok(p) => p,
-                                                                Err(e) => {
-                                                                    log::error!(
-                                                                        "tunnel read faild : {}",
-                                                                        e
-                                                                    );
+                                            let mut tunnel_client_2 = tunnel_client.clone();
+                                            std::thread::Builder::new()
+                                                .name(format!(
+                                                    "ws tunnel worker2 : {}",
+                                                    tunnel_client.local_addr().unwrap()
+                                                ))
+                                                .spawn(move || {
+                                                    loop {
+                                                        let mut buf = match receiver
+                                                            .recv_message()
+                                                        {
+                                                            Ok(p) => match p {
+                                                                OwnedMessage::Binary(p) => p,
+                                                                OwnedMessage::Close(_) => {
                                                                     break;
                                                                 }
-                                                            };
-
-                                                            if buf.is_empty() {
-                                                                break;
-                                                            }
-
-                                                            if let Err(e) = sender.send_message(
-                                                                &OwnedMessage::Binary(buf),
-                                                            ) {
+                                                                _ => continue,
+                                                            },
+                                                            Err(e) => {
                                                                 log::error!(
-                                                                    "ws sender error : {}",
+                                                                    "ws receiver error : {}",
                                                                     e
                                                                 );
                                                                 break;
                                                             }
+                                                        };
+
+                                                        if let Err(e) =
+                                                            tunnel_client_2.send(&mut buf)
+                                                        {
+                                                            log::error!(
+                                                                "ws sender error : {}",
+                                                                e
+                                                            );
+                                                            break;
                                                         }
-                                                        log::debug!("ws tunnel1 finished!");
-                                                    })
-                                                    .unwrap();
+                                                    }
 
-                                                let mut tunnel_client_2 = tunnel_client.clone();
-                                                std::thread::Builder::new()
-                                                    .name(format!(
-                                                        "ws tunnel worker2 : {}",
-                                                        tunnel_client.local_addr().unwrap()
-                                                    ))
-                                                    .spawn(move || {
-                                                        loop {
-                                                            let mut buf = match receiver
-                                                                .recv_message()
-                                                            {
-                                                                Ok(p) => match p {
-                                                                    OwnedMessage::Binary(p) => p,
-                                                                    OwnedMessage::Close(_) => {
-                                                                        break;
-                                                                    }
-                                                                    _ => continue,
-                                                                },
-                                                                Err(e) => {
-                                                                    log::error!(
-                                                                        "ws receiver error : {}",
-                                                                        e
-                                                                    );
-                                                                    break;
-                                                                }
-                                                            };
+                                                    log::debug!("ws tunnel2 finished!");
+                                                })
+                                                .unwrap();
 
-                                                            if let Err(e) =
-                                                                tunnel_client_2.send(&mut buf)
-                                                            {
-                                                                log::error!(
-                                                                    "ws sender error : {}",
-                                                                    e
-                                                                );
-                                                                break;
-                                                            }
-                                                        }
-
-                                                        log::debug!("ws tunnel2 finished!");
-                                                    })
-                                                    .unwrap();
-
-                                                break;
-                                            }
+                                            break;
                                         }
 
                                         cb_data.lock().unwrap()(
@@ -246,7 +244,7 @@ impl Server for WSServer {
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        Ok(self.local_addr.clone())
+        Ok(self.local_addr)
     }
 
     fn sendto(&mut self, peer_addr: &SocketAddr, buf: &[u8]) -> std::io::Result<()> {
@@ -376,22 +374,22 @@ impl Client for WSConnection {
 
         match s_lock.recv_message() {
             Ok(msg) => match msg {
-                OwnedMessage::Binary(buf) => return Ok(buf),
+                OwnedMessage::Binary(buf) => Ok(buf),
                 OwnedMessage::Close(_) => {
                     drop(s_lock);
                     self.close();
-                    return Err(std::io::Error::new(
+                    Err(std::io::Error::new(
                         std::io::ErrorKind::Interrupted,
-                        format!("ws closed"),
-                    ));
+                        "ws closed".to_string(),
+                    ))
                 }
-                _ => return Ok(vec![]),
+                _ => Ok(vec![]),
             },
             Err(e) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::Interrupted,
                     format!("ws receive error : {}", e),
-                ));
+                ))
             }
         }
     }
@@ -425,7 +423,7 @@ impl Client for WSConnection {
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        Ok(self.local_addr.clone())
+        Ok(self.local_addr)
     }
 
     fn close(&mut self) {
@@ -441,7 +439,7 @@ impl Clone for WSConnection {
             reader: self.reader.clone(),
             writer: self.writer.clone(),
             closed: self.closed.clone(),
-            local_addr: self.local_addr.clone(),
+            local_addr: self.local_addr,
         }
     }
 }
@@ -455,7 +453,7 @@ impl Drop for WSConnection {
 
 #[test]
 fn test_ws_tunnel() {
-    let server = WSServer::new(&"127.0.0.1:0", |_, _, _, _| {}, |_| {}).unwrap();
+    let server = WSServer::new("127.0.0.1:0", |_, _, _, _| {}, |_| {}).unwrap();
     let server2 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let remote_local_port = server2.local_addr().unwrap().port();
 

@@ -32,7 +32,7 @@ fn build_ftp_rpc_packet(rpc_data: &RpcMessage) -> Result<FTPPacket> {
 pub fn get_remote_disk_info(sender: &Sender<FTPPacket>) -> Result<Vec<FileInfo>> {
     let msg = RpcMessage::build_call("get_disk_info", vec![]);
     let mut remote_disk_info = vec![];
-    send_ftp_packet(&sender, build_ftp_rpc_packet(&msg)?)?;
+    send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode != 0 {
@@ -71,7 +71,7 @@ pub fn get_remote_folder_info(
 ) -> Result<Vec<FileInfo>> {
     let msg = RpcMessage::build_call("get_folder_info", vec![full_path.clone()]);
     let mut remote_folder_info = vec![];
-    send_ftp_packet(&sender, build_ftp_rpc_packet(&msg)?)?;
+    send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode != 0 {
@@ -95,7 +95,7 @@ pub fn get_remote_join_path(
     filename: &String,
 ) -> Result<String> {
     let msg = RpcMessage::build_call("join_path", vec![cur_path.clone(), filename.clone()]);
-    send_ftp_packet(&sender, build_ftp_rpc_packet(&msg)?)?;
+    send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode != 0 {
@@ -130,7 +130,7 @@ pub fn delete_local_file(full_path: &String) -> Result<()> {
 
 pub fn delete_remote_file(sender: &Sender<FTPPacket>, full_path: &String) -> Result<()> {
     let msg = RpcMessage::build_call("remove_file", vec![full_path.clone()]);
-    send_ftp_packet(&sender, build_ftp_rpc_packet(&msg)?)?;
+    send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode != 0 {
@@ -165,7 +165,7 @@ pub fn download_file(
             "md5_file",
             vec![remote_path.clone(), f.metadata()?.len().to_string()],
         );
-        send_ftp_packet(&sender, build_ftp_rpc_packet(&msg)?)?;
+        send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
         let (remote_md5, file_size) = match G_RPCCLIENT.wait_msg(&msg.id, 10) {
             Ok(p) => {
                 if p.retcode != 0 {
@@ -197,7 +197,7 @@ pub fn download_file(
         let f = std::fs::File::create(local_path)?;
 
         let msg = RpcMessage::build_call("file_size", vec![remote_path.clone()]);
-        send_ftp_packet(&sender, build_ftp_rpc_packet(&msg)?)?;
+        send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
         let file_size = match G_RPCCLIENT.wait_msg(&msg.id, 10) {
             Ok(p) => {
                 if p.retcode != 0 {
@@ -282,7 +282,7 @@ pub fn download_file(
                     }
                 };
 
-                if data.len() == 0 {
+                if data.is_empty() {
                     break;
                 }
 
@@ -355,7 +355,7 @@ pub fn upload_file(
     };
 
     let msg = RpcMessage::build_call("md5_file", vec![remote_path.clone()]);
-    send_ftp_packet(&sender, build_ftp_rpc_packet(&msg)?)?;
+    send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode == 0 {

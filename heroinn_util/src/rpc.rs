@@ -29,7 +29,7 @@ impl RpcMessage {
         match serde_json::to_vec(self) {
             Ok(p) => Ok(p),
             Err(_) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "serilize RpcMessage faild",
                 ))
@@ -44,7 +44,7 @@ impl RpcMessage {
             retcode: 0,
             time: cur_timestamp_secs(),
             msg: String::new(),
-            data: data,
+            data,
         }
     }
 }
@@ -90,27 +90,27 @@ impl RpcServer {
                     return ret;
                 }
             };
-            let ret = RpcMessage {
+            
+
+            RpcMessage {
                 id: data.id.clone(),
                 name: data.name.clone(),
                 data: param,
                 time: cur_timestamp_secs(),
                 msg: String::new(),
                 retcode: 0,
-            };
-
-            return ret;
+            }
         } else {
-            let ret = RpcMessage {
+            
+
+            RpcMessage {
                 id: data.id.clone(),
                 name: data.name.clone(),
                 data: vec![],
                 time: cur_timestamp_secs(),
                 msg: format!("not found rpc [{}]", data.name),
                 retcode: -1,
-            };
-
-            return ret;
+            }
         }
     }
 }

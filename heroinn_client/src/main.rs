@@ -132,7 +132,7 @@ fn main() {
         let hostinfo = HostInfo {
             ip: ips,
             host_name: hostname,
-            os: os,
+            os,
             whoami: whoami::username(),
             remark: config.remark.clone(),
         };

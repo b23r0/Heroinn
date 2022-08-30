@@ -84,7 +84,7 @@ impl Session for ShellServer {
                 match sender_1.send(SessionBase {
                     id: id_1.clone(),
                     clientid: clientid_1.clone(),
-                    packet: packet,
+                    packet,
                 }) {
                     Ok(_) => {}
                     Err(e) => {
@@ -101,22 +101,20 @@ impl Session for ShellServer {
             id,
             closed,
             clientid: clientid.clone(),
-            term: term.clone(),
+            term,
             sender,
         })
     }
 
     fn id(&self) -> String {
-        return self.id.clone();
+        self.id.clone()
     }
 
     fn write(&mut self, data: &Vec<u8>) -> std::io::Result<()> {
-        if data.len() == 3 && self.alive() {
-            if data == &vec![MAGIC_FLAG[0], MAGIC_FLAG[1], 0xff] {
-                log::info!("client closed");
-                self.close();
-                return Ok(());
-            }
+        if data.len() == 3 && self.alive() && data == &vec![MAGIC_FLAG[0], MAGIC_FLAG[1], 0xff] {
+            log::info!("client closed");
+            self.close();
+            return Ok(());
         }
 
         self.term.write(data)
@@ -133,7 +131,7 @@ impl Session for ShellServer {
         match self.sender.send(SessionBase {
             id: self.id.clone(),
             clientid: self.clientid.clone(),
-            packet: packet,
+            packet,
         }) {
             Ok(_) => {}
             Err(_) => {}

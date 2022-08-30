@@ -286,7 +286,7 @@ impl Client for TcpConnection {
         let buf = TUNNEL_FLAG.to_vec();
 
         s.write_all(&buf)?;
-        s.write_all(&server_local_port.to_be_bytes().to_vec())?;
+        s.write_all(server_local_port.to_be_bytes().as_ref())?;
 
         Ok(Self {
             s: Some(s),
@@ -444,7 +444,7 @@ impl Drop for TcpServer {
 
 #[test]
 fn test_tcp_tunnel() {
-    let server = TcpServer::new(&"127.0.0.1:0", |_, _, _, _| {}, |_| {}).unwrap();
+    let server = TcpServer::new("127.0.0.1:0", |_, _, _, _| {}, |_| {}).unwrap();
     let server2 = TcpListener::bind("127.0.0.1:0").unwrap();
     let remote_local_port = server2.local_addr().unwrap().port();
 

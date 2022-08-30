@@ -252,7 +252,7 @@ impl Session for FtpClient {
                             }
                         };
 
-                        if data.len() == 0 {
+                        if data.is_empty() {
                             break;
                         }
 

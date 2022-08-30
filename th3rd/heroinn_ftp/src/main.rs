@@ -375,73 +375,69 @@ impl FtpApp {
                         let filename = i.name.clone();
 
                         let mut menu = |ui: &mut egui::Ui| {
-                            if i.typ == "FOLDER"
+                            if (i.typ == "FOLDER"
                                 || i.typ == "SSD"
-                                || i.typ == "HDD"
-                                || i.typ == "Unknown Drive"
-                            {
-                                if ui.button("Open").clicked() {
-                                    if typ == FSType::Local {
-                                        let fullpath = join_path(vec![
-                                            self.local_path.clone(),
-                                            filename.clone(),
-                                        ])
-                                        .unwrap()[0]
-                                            .clone();
+                                || i.typ == "HDD" || i.typ == "Unknown Drive") && ui.button("Open").clicked() {
+                                if typ == FSType::Local {
+                                    let fullpath = join_path(vec![
+                                        self.local_path.clone(),
+                                        filename.clone(),
+                                    ])
+                                    .unwrap()[0]
+                                        .clone();
 
-                                        self.local_disk_info =
-                                            match get_local_folder_info(&fullpath) {
-                                                Ok(p) => p,
-                                                Err(e) => {
-                                                    msgbox::error(
-                                                        &self.title.to_string(),
-                                                        &format!("get folder info faild : {}", e),
-                                                    );
-                                                    ui.close_menu();
-                                                    return;
-                                                }
-                                            };
-
-                                        self.local_folder_strace.push(self.local_path.clone());
-                                        self.local_path = fullpath;
-                                    } else {
-                                        let fullpath = match get_remote_join_path(
-                                            &self.sender,
-                                            &self.remote_path,
-                                            &filename,
-                                        ) {
+                                    self.local_disk_info =
+                                        match get_local_folder_info(&fullpath) {
                                             Ok(p) => p,
                                             Err(e) => {
                                                 msgbox::error(
                                                     &self.title.to_string(),
-                                                    &format!("join remote path faild : {}", e),
+                                                    &format!("get folder info faild : {}", e),
                                                 );
                                                 ui.close_menu();
                                                 return;
                                             }
                                         };
 
-                                        self.remote_disk_info =
-                                            match get_remote_folder_info(&self.sender, &fullpath) {
-                                                Ok(p) => p,
-                                                Err(e) => {
-                                                    msgbox::error(
-                                                        &self.title.to_string(),
-                                                        &format!(
-                                                            "get remote folder info faild : {}",
-                                                            e
-                                                        ),
-                                                    );
-                                                    ui.close_menu();
-                                                    return;
-                                                }
-                                            };
+                                    self.local_folder_strace.push(self.local_path.clone());
+                                    self.local_path = fullpath;
+                                } else {
+                                    let fullpath = match get_remote_join_path(
+                                        &self.sender,
+                                        &self.remote_path,
+                                        &filename,
+                                    ) {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            msgbox::error(
+                                                &self.title.to_string(),
+                                                &format!("join remote path faild : {}", e),
+                                            );
+                                            ui.close_menu();
+                                            return;
+                                        }
+                                    };
 
-                                        self.remote_folder_strace.push(self.remote_path.clone());
-                                        self.remote_path = fullpath;
-                                    }
-                                    ui.close_menu();
+                                    self.remote_disk_info =
+                                        match get_remote_folder_info(&self.sender, &fullpath) {
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                msgbox::error(
+                                                    &self.title.to_string(),
+                                                    &format!(
+                                                        "get remote folder info faild : {}",
+                                                        e
+                                                    ),
+                                                );
+                                                ui.close_menu();
+                                                return;
+                                            }
+                                        };
+
+                                    self.remote_folder_strace.push(self.remote_path.clone());
+                                    self.remote_path = fullpath;
                                 }
+                                ui.close_menu();
                             }
 
                             if i.typ == "FILE" {
@@ -501,62 +497,60 @@ impl FtpApp {
 
                                         ui.close_menu();
                                     }
-                                } else {
-                                    if ui.button("Upload").clicked() {
-                                        if self.local_path != FtpApp::ROOT_FLAG
-                                            && self.remote_path != FtpApp::ROOT_FLAG
-                                        {
-                                            let remote_path = match get_remote_join_path(
-                                                &self.sender,
-                                                &self.remote_path,
-                                                &filename,
-                                            ) {
-                                                Ok(p) => p,
-                                                Err(e) => {
-                                                    msgbox::error(
-                                                        &self.title.to_string(),
-                                                        &format!("join remote path faild : {}", e),
-                                                    );
-                                                    ui.close_menu();
-                                                    return;
-                                                }
-                                            };
+                                } else if ui.button("Upload").clicked() {
+                                    if self.local_path != FtpApp::ROOT_FLAG
+                                        && self.remote_path != FtpApp::ROOT_FLAG
+                                    {
+                                        let remote_path = match get_remote_join_path(
+                                            &self.sender,
+                                            &self.remote_path,
+                                            &filename,
+                                        ) {
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                msgbox::error(
+                                                    &self.title.to_string(),
+                                                    &format!("join remote path faild : {}", e),
+                                                );
+                                                ui.close_menu();
+                                                return;
+                                            }
+                                        };
 
-                                            let local_path = join_path(vec![
-                                                self.local_path.clone(),
-                                                filename.clone(),
-                                            ])
-                                            .unwrap()[0]
-                                                .clone();
-                                            match upload_file(
-                                                &self.sender,
-                                                &local_path,
-                                                &remote_path,
-                                            ) {
-                                                Ok(_) => {
-                                                    self.switch = SwitchDock::Transfer;
-                                                }
-                                                Err(e) => {
-                                                    msgbox::error(
-                                                        &self.title.to_string(),
-                                                        &format!(
-                                                            "download remote file faild : {}",
-                                                            e
-                                                        ),
-                                                    );
-                                                    ui.close_menu();
-                                                    return;
-                                                }
-                                            };
-                                        } else {
-                                            msgbox::error(
-                                                &self.title,
-                                                &"not allow download to root path".to_string(),
-                                            );
-                                        }
-
-                                        ui.close_menu();
+                                        let local_path = join_path(vec![
+                                            self.local_path.clone(),
+                                            filename.clone(),
+                                        ])
+                                        .unwrap()[0]
+                                            .clone();
+                                        match upload_file(
+                                            &self.sender,
+                                            &local_path,
+                                            &remote_path,
+                                        ) {
+                                            Ok(_) => {
+                                                self.switch = SwitchDock::Transfer;
+                                            }
+                                            Err(e) => {
+                                                msgbox::error(
+                                                    &self.title.to_string(),
+                                                    &format!(
+                                                        "download remote file faild : {}",
+                                                        e
+                                                    ),
+                                                );
+                                                ui.close_menu();
+                                                return;
+                                            }
+                                        };
+                                    } else {
+                                        msgbox::error(
+                                            &self.title,
+                                            &"not allow download to root path".to_string(),
+                                        );
                                     }
+
+                                    ui.close_menu();
                                 }
 
                                 if ui.button("Delete").clicked() {
@@ -672,7 +666,7 @@ impl FtpApp {
                             });
 
                             row.col(|ui| {
-                                ui.label(format!("{}", transfer_size(i.size as f64)));
+                                ui.label(transfer_size(i.size as f64));
                             })
                             .context_menu(|ui| {
                                 menu(ui);
@@ -798,7 +792,7 @@ impl FtpApp {
     }
     fn refresh_remote_path(remote_path: &String, sender: &Sender<FTPPacket>) -> Vec<FileInfo> {
         if remote_path == FtpApp::ROOT_FLAG {
-            match get_remote_disk_info(&sender) {
+            match get_remote_disk_info(sender) {
                 Ok(p) => p,
                 Err(e) => {
                     msgbox::error(

@@ -51,7 +51,7 @@ impl Server for UDPServer {
         let connections_1 = connections.clone();
         let closed_1 = closed.clone();
         let cb_data = Arc::new(Mutex::new(cb_data));
-        let local_addr_1 = local_addr.clone();
+        let local_addr_1 = local_addr;
         std::thread::Builder::new()
             .name(format!("udp main worker : {}", local_addr_1.clone()))
             .spawn(move || {
@@ -81,7 +81,7 @@ impl Server for UDPServer {
                     connections_1
                         .lock()
                         .unwrap()
-                        .insert(remote_addr.clone(), client.clone());
+                        .insert(remote_addr, client.clone());
 
                     std::thread::Builder::new()
                         .name(format!("udp client worker : {}", local_addr_1.clone()))
@@ -95,91 +95,89 @@ impl Server for UDPServer {
                                     }
                                 };
 
-                                if buf.len() == TUNNEL_FLAG.len() + 3 {
-                                    if buf[1..5] == TUNNEL_FLAG {
-                                        let port = [buf[5], buf[6]];
-                                        let port = u16::from_be_bytes(port);
+                                if buf.len() == TUNNEL_FLAG.len() + 3 && buf[1..5] == TUNNEL_FLAG {
+                                    let port = [buf[5], buf[6]];
+                                    let port = u16::from_be_bytes(port);
 
-                                        let full_addr = format!("127.0.0.1:{}", port);
-                                        let tunnel_client = match TcpConnection::connect(&full_addr)
-                                        {
-                                            Ok(p) => p,
-                                            Err(e) => {
-                                                log::error!("tunnel connect faild : {}", e);
-                                                break;
+                                    let full_addr = format!("127.0.0.1:{}", port);
+                                    let tunnel_client = match TcpConnection::connect(&full_addr)
+                                    {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            log::error!("tunnel connect faild : {}", e);
+                                            break;
+                                        }
+                                    };
+
+                                    let mut tunnel_client_1 = tunnel_client.clone();
+                                    let client_1 = client.clone();
+                                    std::thread::Builder::new()
+                                        .name(format!(
+                                            "udp tunnel worker1 : {}",
+                                            tunnel_client.local_addr().unwrap()
+                                        ))
+                                        .spawn(move || {
+                                            loop {
+                                                let buf = match tunnel_client_1.recv() {
+                                                    Ok(p) => p,
+                                                    Err(e) => {
+                                                        log::error!(
+                                                            "tunnel read faild : {}",
+                                                            e
+                                                        );
+                                                        break;
+                                                    }
+                                                };
+
+                                                if buf.is_empty() {
+                                                    break;
+                                                }
+
+                                                let mut data = vec![0xfe];
+                                                data.append(&mut buf.to_vec());
+
+                                                if let Err(e) = client_1.send(data) {
+                                                    log::error!("udp sender error : {}", e);
+                                                    break;
+                                                }
                                             }
-                                        };
+                                            log::debug!("udp tunnel1 finished!");
+                                        })
+                                        .unwrap();
 
-                                        let mut tunnel_client_1 = tunnel_client.clone();
-                                        let client_1 = client.clone();
-                                        std::thread::Builder::new()
-                                            .name(format!(
-                                                "udp tunnel worker1 : {}",
-                                                tunnel_client.local_addr().unwrap()
-                                            ))
-                                            .spawn(move || {
-                                                loop {
-                                                    let buf = match tunnel_client_1.recv() {
-                                                        Ok(p) => p,
-                                                        Err(e) => {
-                                                            log::error!(
-                                                                "tunnel read faild : {}",
-                                                                e
-                                                            );
-                                                            break;
-                                                        }
-                                                    };
-
-                                                    if buf.is_empty() {
+                                    let mut tunnel_client_2 = tunnel_client.clone();
+                                    let client_2 = client.clone();
+                                    std::thread::Builder::new()
+                                        .name(format!(
+                                            "udp tunnel worker2 : {}",
+                                            tunnel_client.local_addr().unwrap()
+                                        ))
+                                        .spawn(move || {
+                                            loop {
+                                                let mut buf = match client_2.recv() {
+                                                    Ok(p) => p,
+                                                    Err(e) => {
+                                                        log::error!(
+                                                            "udp receiver error : {}",
+                                                            e
+                                                        );
                                                         break;
                                                     }
+                                                };
 
-                                                    let mut data = vec![0xfe];
-                                                    data.append(&mut buf.to_vec());
-
-                                                    if let Err(e) = client_1.send(data) {
-                                                        log::error!("udp sender error : {}", e);
-                                                        break;
-                                                    }
+                                                if let Err(e) =
+                                                    tunnel_client_2.send(&mut buf[1..])
+                                                {
+                                                    log::error!("udp sender error : {}", e);
+                                                    break;
                                                 }
-                                                log::debug!("udp tunnel1 finished!");
-                                            })
-                                            .unwrap();
+                                            }
 
-                                        let mut tunnel_client_2 = tunnel_client.clone();
-                                        let client_2 = client.clone();
-                                        std::thread::Builder::new()
-                                            .name(format!(
-                                                "udp tunnel worker2 : {}",
-                                                tunnel_client.local_addr().unwrap()
-                                            ))
-                                            .spawn(move || {
-                                                loop {
-                                                    let mut buf = match client_2.recv() {
-                                                        Ok(p) => p,
-                                                        Err(e) => {
-                                                            log::error!(
-                                                                "udp receiver error : {}",
-                                                                e
-                                                            );
-                                                            break;
-                                                        }
-                                                    };
+                                            log::debug!("udp tunnel2 finished!");
+                                        })
+                                        .unwrap();
 
-                                                    if let Err(e) =
-                                                        tunnel_client_2.send(&mut buf[1..])
-                                                    {
-                                                        log::error!("udp sender error : {}", e);
-                                                        break;
-                                                    }
-                                                }
-
-                                                log::debug!("udp tunnel2 finished!");
-                                            })
-                                            .unwrap();
-
-                                        break;
-                                    }
+                                    break;
                                 }
 
                                 cb_data.lock().unwrap()(
@@ -221,11 +219,11 @@ impl Server for UDPServer {
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        Ok(self.local_addr.clone())
+        Ok(self.local_addr)
     }
 
     fn sendto(&mut self, peer_addr: &SocketAddr, buf: &[u8]) -> std::io::Result<()> {
-        match self.connections.lock().unwrap().get_mut(&peer_addr) {
+        match self.connections.lock().unwrap().get_mut(peer_addr) {
             Some(k) => {
                 let mut data = vec![0xfe];
                 data.append(&mut buf.to_vec());
@@ -249,7 +247,7 @@ impl Server for UDPServer {
     }
 
     fn contains_addr(&mut self, peer_addr: &SocketAddr) -> bool {
-        self.connections.lock().unwrap().contains_key(&peer_addr)
+        self.connections.lock().unwrap().contains_key(peer_addr)
     }
 
     fn close(&mut self) {
@@ -324,10 +322,10 @@ impl Client for UDPConnection {
         match s.recv() {
             Ok(msg) => Ok(msg[1..].to_vec()),
             Err(e) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::Interrupted,
                     format!("udp receive error : {}", e),
-                ));
+                ))
             }
         }
     }
@@ -358,7 +356,7 @@ impl Client for UDPConnection {
     }
 
     fn local_addr(&self) -> std::io::Result<SocketAddr> {
-        Ok(self.local_addr.clone())
+        Ok(self.local_addr)
     }
 
     fn close(&mut self) {
@@ -372,7 +370,7 @@ impl Clone for UDPConnection {
         Self {
             s: self.s.clone(),
             closed: self.closed.clone(),
-            local_addr: self.local_addr.clone(),
+            local_addr: self.local_addr,
         }
     }
 }
@@ -385,7 +383,7 @@ impl Drop for UDPConnection {
 
 #[test]
 fn test_udp_tunnel() {
-    let server = UDPServer::new(&"127.0.0.1:0", |_, _, _, _| {}, |_| {}).unwrap();
+    let server = UDPServer::new("127.0.0.1:0", |_, _, _, _| {}, |_| {}).unwrap();
     let server2 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let remote_local_port = server2.local_addr().unwrap().port();
 

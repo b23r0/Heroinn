@@ -84,7 +84,7 @@ impl ConnectionInfo {
         match serde_json::to_vec(self) {
             Ok(p) => Ok(p),
             Err(_) => {
-                return Err(std::io::Error::new(
+                Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "serilize TunnelRequest packet faild",
                 ))
@@ -93,7 +93,7 @@ impl ConnectionInfo {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum HeroinnClientMsgID {
     HostInfo,
     Heartbeat,
@@ -121,7 +121,7 @@ impl HeroinnClientMsgID {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum HeroinnServerCommandID {
     Shell,
     File,
@@ -149,7 +149,7 @@ impl HeroinnServerCommandID {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeroinnProtocol {
     TCP,
     HTTP,
