@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 pub mod ftp;
 pub mod gen;
-pub mod msgbox;
 pub mod packet;
 pub mod protocol;
 pub mod rpc;

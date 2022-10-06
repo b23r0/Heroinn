@@ -14,13 +14,13 @@ use heroinn_util::{
         method::{join_path, transfer_size, transfer_speed},
         FTPId, FTPPacket, FileInfo,
     },
-    msgbox,
     protocol::{tcp::TcpConnection, Client},
     rpc::{RpcClient, RpcMessage},
 };
 use lazy_static::*;
 
 mod controller;
+mod msgbox;
 use controller::*;
 
 lazy_static! {

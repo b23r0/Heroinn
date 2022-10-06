@@ -5,6 +5,7 @@ use egui_extras::{Size, StripBuilder, TableBuilder};
 use heroinn_util::{ftp::method::transfer_speed, gen::replace_connection_info_to_new_file, *};
 
 mod controller;
+mod msgbox;
 
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
