@@ -68,6 +68,15 @@ impl RUdpClient {
                 ));
             }
         };
+        match RT.block_on(self.client.flush()) {
+            Ok(_) => {}
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    format!("{:?}", e),
+                ));
+            }
+        };
         Ok(())
     }
 
