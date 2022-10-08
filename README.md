@@ -41,3 +41,9 @@ _This project is for research and study purposes only, and any illegal behavior 
 * Supplement the documentation about using `Heroinn`
 
 Everyone for me, I for everyone.
+
+# Donation
+
+BTC : 1HeroYcNYMhjsq8RYCx1stSaRZnQd9B9Eq
+
+ETH : 0x9999997B3deF7b69c09D7a9CA65E5242fb04a764
