@@ -22,8 +22,8 @@ _This project is for research and study purposes only, and any illegal behavior 
 - [ ] reverse socks5 proxy support
 - [ ] shellcode
   - [ ] stage(.so/.dll) to shellcode
-  - [ ] dropper
-  - [ ] dropper generator
+  - [ ] loader(no stage)
+  - [ ] loader generator
 - [ ] cross firewall
   - [ ] http proxy auto detect
 - [ ] basic
