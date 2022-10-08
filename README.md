@@ -14,7 +14,26 @@ _This project is for research and study purposes only, and any illegal behavior 
 * Support Win10+(Windows Server 2019+) & Linux & BSD & OSX
 * Multiple communication protocols (TCP & HTTP & reliable UDP)
 
+# Todo
+
+- [ ] Documentation
+  - [ ] how to compile
+  - [ ] usage
+- [ ] reverse socks5 proxy support
+- [ ] shellcode
+  - [ ] stage(.so/.dll) to shellcode
+  - [ ] dropper
+  - [ ] dropper generator
+- [ ] cross firewall
+  - [ ] http proxy auto detect
+- [ ] basic
+  - [ ] serilized communication  protocol convert json to bson
+  - [ ] unit test
+
+
 # Contributing
+
+[![ChatOnDiscord](https://img.shields.io/badge/chat-on%20discord-blue)](https://discord.gg/ZKtYMvDFN4)
 
 * Report a BUG
 * Submit an ISSUE about suggestion
