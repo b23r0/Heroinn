@@ -8,28 +8,25 @@ use std::{
 };
 
 use eframe::{egui, App};
-use egui_extras::{Size, StripBuilder};
+use egui_extras::{Column, Size, StripBuilder};
 use heroinn_util::{
     ftp::{
         method::{join_path, transfer_size, transfer_speed},
         FTPId, FTPPacket, FileInfo,
     },
-    protocol::{tcp::TcpConnection, Client},
+    protocol::tcp::TcpConnection,
     rpc::{RpcClient, RpcMessage},
 };
-use lazy_static::*;
+use std::sync::LazyLock;
 
 mod controller;
 mod msgbox;
 use controller::*;
 
-lazy_static! {
-    static ref G_RPCCLIENT: Arc<RpcClient> = Arc::new(RpcClient::new());
-    static ref G_TRANSFER: Arc<RwLock<HashMap<String, TransferInfo>>> =
-        Arc::new(RwLock::new(HashMap::new()));
-}
+static G_RPCCLIENT: LazyLock<Arc<RpcClient>> = LazyLock::new(|| Arc::new(RpcClient::new()));
+static G_TRANSFER: LazyLock<Arc<RwLock<HashMap<String, TransferInfo>>>> =
+    LazyLock::new(|| Arc::new(RwLock::new(HashMap::new())));
 
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SwitchDock {
     List,
@@ -49,6 +46,16 @@ impl std::fmt::Debug for FSType {
             Self::Remote => write!(f, "Remote FS"),
         }
     }
+}
+
+/// Decode an embedded `.ico` resource into a GPU-resident egui texture.
+fn load_icon(ctx: &egui::Context, name: &str, bytes: &[u8]) -> egui::TextureHandle {
+    let img = image::load_from_memory(bytes)
+        .expect("failed to decode embedded icon")
+        .to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+    ctx.load_texture(name, color, egui::TextureOptions::LINEAR)
 }
 
 #[derive(Debug, Clone)]
@@ -71,9 +78,9 @@ struct FtpApp {
     local_disk_info: Vec<FileInfo>,
     remote_disk_info: Vec<FileInfo>,
     sender: Sender<FTPPacket>,
-    drive_image: egui_extras::RetainedImage,
-    folder_image: egui_extras::RetainedImage,
-    file_image: egui_extras::RetainedImage,
+    drive_image: Option<egui::TextureHandle>,
+    folder_image: Option<egui::TextureHandle>,
+    file_image: Option<egui::TextureHandle>,
     local_folder_strace: Vec<String>,
     remote_folder_strace: Vec<String>,
 }
@@ -103,21 +110,9 @@ impl FtpApp {
             remote_disk_info,
             sender,
             local_disk_info,
-            drive_image: egui_extras::RetainedImage::from_image_bytes(
-                "drive.ico",
-                include_bytes!("res/drive.ico"),
-            )
-            .unwrap(),
-            folder_image: egui_extras::RetainedImage::from_image_bytes(
-                "folder.ico",
-                include_bytes!("res/folder.ico"),
-            )
-            .unwrap(),
-            file_image: egui_extras::RetainedImage::from_image_bytes(
-                "file.ico",
-                include_bytes!("res/file.ico"),
-            )
-            .unwrap(),
+            drive_image: None,
+            folder_image: None,
+            file_image: None,
             title: String::from("Heroinn FTP"),
             local_folder_strace: vec![],
             remote_folder_strace: vec![],
@@ -126,22 +121,45 @@ impl FtpApp {
 }
 
 impl App for FtpApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if !self.initilized {
-                ui.ctx().set_visuals(egui::Visuals::dark());
-                self.initilized = true;
-            }
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
 
+        if !self.initilized {
+            ctx.set_theme(egui::Theme::Dark);
+            self.initilized = true;
+        }
+
+        if self.drive_image.is_none() {
+            self.drive_image = Some(load_icon(&ctx, "drive.ico", include_bytes!("res/drive.ico")));
+        }
+        if self.folder_image.is_none() {
+            self.folder_image = Some(load_icon(
+                &ctx,
+                "folder.ico",
+                include_bytes!("res/folder.ico"),
+            ));
+        }
+        if self.file_image.is_none() {
+            self.file_image = Some(load_icon(&ctx, "file.ico", include_bytes!("res/file.ico")));
+        }
+
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.switch, SwitchDock::List, "List");
                 ui.selectable_value(&mut self.switch, SwitchDock::Transfer, "Transfer");
 
-                let visuals = ui.ctx().style().visuals.clone();
-                match visuals.light_dark_small_toggle_button(ui) {
-                    Some(v) => ui.ctx().set_visuals(v),
-                    None => {}
-                };
+                let dark = matches!(ui.ctx().theme(), egui::Theme::Dark);
+                if ui
+                    .button(if dark { "Light" } else { "Dark" })
+                    .on_hover_text("Toggle light/dark theme")
+                    .clicked()
+                {
+                    ui.ctx().set_theme(if dark {
+                        egui::Theme::Light
+                    } else {
+                        egui::Theme::Dark
+                    });
+                }
             });
 
             ui.separator();
@@ -154,10 +172,10 @@ impl App for FtpApp {
                             strip.strip(|builder| {
                                 builder.sizes(Size::remainder(), 2).horizontal(|mut strip| {
                                     strip.cell(|ui| {
-                                        self.render_file_table("1", ctx, ui, FSType::Local);
+                                        self.render_file_table("1", ui, FSType::Local);
                                     });
                                     strip.cell(|ui| {
-                                        self.render_file_table("2", ctx, ui, FSType::Remote);
+                                        self.render_file_table("2", ui, FSType::Remote);
                                     });
                                 });
                             });
@@ -178,7 +196,7 @@ impl App for FtpApp {
                                 ui.separator();
                             });
                             strip.cell(|ui| {
-                                self.transfer_table("3", ctx, ui);
+                                self.transfer_table("3", ui);
                             });
                         });
                 }
@@ -190,9 +208,9 @@ impl App for FtpApp {
 }
 
 impl FtpApp {
-    fn render_file_table(&mut self, id: &str, ctx: &egui::Context, ui: &mut egui::Ui, typ: FSType) {
+    fn render_file_table(&mut self, id: &str, ui: &mut egui::Ui, typ: FSType) {
         egui::CentralPanel::default()
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
 
             ui.vertical_centered(|ui| {
                 ui.heading(format!("{:?}" ,typ));
@@ -258,7 +276,7 @@ impl FtpApp {
                                                 Ok(p) => p,
                                                 Err(e) => {
                                                     msgbox::error(&"heroinn FTP".to_string(), &format!("get folder info failed : {}" ,e));
-                                                    ui.close_menu();
+                                                    ui.close();
                                                     return;
                                                 },
                                             };
@@ -285,11 +303,11 @@ impl FtpApp {
                                                 return;
                                             }
                                             
-                                            let fullpath = match get_remote_join_path(&self.sender ,&parent_path, &".".to_string()){
+                                            let fullpath = match get_remote_join_path(&self.sender ,&parent_path, "."){
                                                 Ok(p) => p,
                                                 Err(e) => {
                                                     msgbox::error(&self.title.to_string(), &format!("join remote path failed : {}" ,e));
-                                                    ui.close_menu();
+                                                    ui.close();
                                                     return;
                                                 },
                                             };
@@ -299,7 +317,7 @@ impl FtpApp {
                                                 Ok(p) => p,
                                                 Err(e) => {
                                                     msgbox::error(&self.title.to_string(), &format!("get remote folder info failed : {}" ,e));
-                                                    ui.close_menu();
+                                                    ui.close();
                                                     return;
                                                 },
                                             };
@@ -323,11 +341,7 @@ impl FtpApp {
                     .size(Size::remainder())
                     .vertical(|mut strip|{
                         strip.cell(|ui|{
-                            if typ == FSType::Remote{
-                                self.file_table(id,ctx, ui, typ);
-                            } else {
-                                self.file_table(id,ctx, ui , typ);
-                            }
+                            self.file_table(id, ui, typ);
                         });
                     });
                 });
@@ -335,17 +349,17 @@ impl FtpApp {
         });
     }
 
-    fn file_table(&mut self, id: &str, ctx: &egui::Context, ui: &mut egui::Ui, typ: FSType) {
+    fn file_table(&mut self, id: &str, ui: &mut egui::Ui, typ: FSType) {
         ui.push_id(id, |ui| {
             egui_extras::TableBuilder::new(ui)
                 .striped(true)
                 .resizable(true)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Size::initial(50.0).at_least(50.0))
-                .column(Size::initial(110.0).at_least(50.0))
-                .column(Size::initial(50.0).at_least(50.0))
-                .column(Size::initial(90.0).at_least(50.0))
-                .column(Size::initial(165.0).at_least(50.0))
+                .column(Column::initial(50.0).at_least(50.0))
+                .column(Column::initial(110.0).at_least(50.0))
+                .column(Column::initial(50.0).at_least(50.0))
+                .column(Column::initial(90.0).at_least(50.0))
+                .column(Column::initial(165.0).at_least(50.0))
                 .resizable(true)
                 .header(20.0, |mut header| {
                     header.col(|ui| {
@@ -394,7 +408,7 @@ impl FtpApp {
                                                     &self.title.to_string(),
                                                     &format!("get folder info failed : {}", e),
                                                 );
-                                                ui.close_menu();
+                                                ui.close();
                                                 return;
                                             }
                                         };
@@ -413,7 +427,7 @@ impl FtpApp {
                                                 &self.title.to_string(),
                                                 &format!("join remote path failed : {}", e),
                                             );
-                                            ui.close_menu();
+                                            ui.close();
                                             return;
                                         }
                                     };
@@ -429,7 +443,7 @@ impl FtpApp {
                                                         e
                                                     ),
                                                 );
-                                                ui.close_menu();
+                                                ui.close();
                                                 return;
                                             }
                                         };
@@ -437,7 +451,7 @@ impl FtpApp {
                                     self.remote_folder_strace.push(self.remote_path.clone());
                                     self.remote_path = fullpath;
                                 }
-                                ui.close_menu();
+                                ui.close();
                             }
 
                             if i.typ == "FILE" {
@@ -457,7 +471,7 @@ impl FtpApp {
                                                         &self.title.to_string(),
                                                         &format!("join remote path failed : {}", e),
                                                     );
-                                                    ui.close_menu();
+                                                    ui.close();
                                                     return;
                                                 }
                                             };
@@ -484,7 +498,7 @@ impl FtpApp {
                                                             e
                                                         ),
                                                     );
-                                                    ui.close_menu();
+                                                    ui.close();
                                                     return;
                                                 }
                                             };
@@ -495,7 +509,7 @@ impl FtpApp {
                                             );
                                         }
 
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 } else if ui.button("Upload").clicked() {
                                     if self.local_path != FtpApp::ROOT_FLAG
@@ -512,7 +526,7 @@ impl FtpApp {
                                                     &self.title.to_string(),
                                                     &format!("join remote path failed : {}", e),
                                                 );
-                                                ui.close_menu();
+                                                ui.close();
                                                 return;
                                             }
                                         };
@@ -539,7 +553,7 @@ impl FtpApp {
                                                         e
                                                     ),
                                                 );
-                                                ui.close_menu();
+                                                ui.close();
                                                 return;
                                             }
                                         };
@@ -550,7 +564,7 @@ impl FtpApp {
                                         );
                                     }
 
-                                    ui.close_menu();
+                                    ui.close();
                                 }
 
                                 if ui.button("Delete").clicked() {
@@ -566,7 +580,7 @@ impl FtpApp {
                                                     &self.title.to_string(),
                                                     &format!("join remote path failed : {}", e),
                                                 );
-                                                ui.close_menu();
+                                                ui.close();
                                                 return;
                                             }
                                         };
@@ -581,7 +595,7 @@ impl FtpApp {
                                                         e
                                                     ),
                                                 );
-                                                ui.close_menu();
+                                                ui.close();
                                                 return;
                                             }
                                         };
@@ -605,7 +619,7 @@ impl FtpApp {
                                                     &self.title.to_string(),
                                                     &format!("delete local file failed : {}", e),
                                                 );
-                                                ui.close_menu();
+                                                ui.close();
                                                 return;
                                             }
                                         };
@@ -614,7 +628,7 @@ impl FtpApp {
                                             FtpApp::refresh_local_path(&self.local_path);
                                     }
 
-                                    ui.close_menu();
+                                    ui.close();
                                 }
                             }
                         };
@@ -622,60 +636,52 @@ impl FtpApp {
                         let row_height = 20.0;
                         body.row(row_height, |mut row| {
                             row.col(|ui| {
-                                if i.typ == "FOLDER" {
-                                    ui.add(egui::Image::new(
-                                        self.folder_image.texture_id(ctx),
-                                        egui::Vec2::new(20.0, 20.0),
-                                    ));
-                                } else if i.typ == "FILE" {
-                                    ui.add(egui::Image::new(
-                                        self.file_image.texture_id(ctx),
-                                        egui::Vec2::new(20.0, 20.0),
-                                    ));
+                                let icon = if i.typ == "FOLDER" {
+                                    &self.folder_image
                                 } else if i.typ == "SSD"
                                     || i.typ == "HDD"
                                     || i.typ == "Unknown Drive"
                                 {
-                                    ui.add(egui::Image::new(
-                                        self.drive_image.texture_id(ctx),
-                                        egui::Vec2::new(20.0, 20.0),
-                                    ));
+                                    &self.drive_image
                                 } else {
-                                    ui.add(egui::Image::new(
-                                        self.file_image.texture_id(ctx),
+                                    &self.file_image
+                                };
+                                if let Some(tex) = icon {
+                                    ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
+                                        tex.id(),
                                         egui::Vec2::new(20.0, 20.0),
-                                    ));
+                                    )));
                                 }
                             })
-                            .context_menu(|ui| {
+                            .1.context_menu(|ui| {
                                 menu(ui);
                             });
 
                             row.col(|ui| {
                                 ui.label(i.name.clone());
                             })
-                            .context_menu(|ui| {
+                            .1.context_menu(|ui| {
                                 menu(ui);
                             });
 
                             row.col(|ui| {
                                 ui.label(i.typ.clone());
                             })
-                            .context_menu(|ui| {
+                            .1.context_menu(|ui| {
                                 menu(ui);
                             });
 
                             row.col(|ui| {
                                 ui.label(transfer_size(i.size as f64));
                             })
-                            .context_menu(|ui| {
+                            .1.context_menu(|ui| {
                                 menu(ui);
                             });
 
                             row.col(|ui| {
                                 ui.label(i.last_modified.clone());
                             })
-                            .context_menu(|ui| {
+                            .1.context_menu(|ui| {
                                 menu(ui);
                             });
                         });
@@ -684,20 +690,20 @@ impl FtpApp {
         });
     }
 
-    fn transfer_table(&mut self, id: &str, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn transfer_table(&mut self, id: &str, ui: &mut egui::Ui) {
         ui.push_id(id, |ui| {
             egui_extras::TableBuilder::new(ui)
                 .striped(true)
                 .resizable(true)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Size::initial(50.0).at_least(50.0))
-                .column(Size::initial(220.0).at_least(50.0))
-                .column(Size::initial(220.0).at_least(50.0))
-                .column(Size::initial(80.0).at_least(50.0))
-                .column(Size::initial(100.0).at_least(50.0))
-                .column(Size::initial(100.0).at_least(50.0))
-                .column(Size::initial(150.0).at_least(50.0))
-                .column(Size::initial(55.0).at_least(50.0))
+                .column(Column::initial(50.0).at_least(50.0))
+                .column(Column::initial(220.0).at_least(50.0))
+                .column(Column::initial(220.0).at_least(50.0))
+                .column(Column::initial(80.0).at_least(50.0))
+                .column(Column::initial(100.0).at_least(50.0))
+                .column(Column::initial(100.0).at_least(50.0))
+                .column(Column::initial(150.0).at_least(50.0))
+                .column(Column::initial(55.0).at_least(50.0))
                 .resizable(true)
                 .header(20.0, |mut header| {
                     header.col(|ui| {
@@ -734,10 +740,12 @@ impl FtpApp {
                         let row_height = 20.0;
                         body.row(row_height, |mut row| {
                             row.col(|ui| {
-                                ui.add(egui::Image::new(
-                                    self.file_image.texture_id(ctx),
-                                    egui::Vec2::new(20.0, 20.0),
-                                ));
+                                if let Some(tex) = &self.file_image {
+                                    ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
+                                        tex.id(),
+                                        egui::Vec2::new(20.0, 20.0),
+                                    )));
+                                }
                             });
 
                             row.col(|ui| {
@@ -852,17 +860,16 @@ fn main() {
             let packet = FTPPacket::parse(&data).unwrap();
 
             match packet.id() {
-                FTPId::RPC => {
+                Ok(FTPId::RPC) => {
                     let msg = RpcMessage::parse(&packet.data).unwrap();
                     log::debug!("ftp recv msg from core : {}", msg.id);
                     G_RPCCLIENT.write(&msg);
                 }
-                FTPId::Close => {
+                Ok(FTPId::Close) => {
                     std::process::exit(0);
                 }
-                FTPId::Get => {}
-                FTPId::Put => {}
-                FTPId::Unknown => {}
+                Ok(FTPId::Get | FTPId::Put) => {}
+                Err(e) => log::warn!("unknown ftp packet id : {}", e),
             }
         })
         .unwrap();
@@ -879,15 +886,18 @@ fn main() {
                 }
             };
             log::debug!("ftp send msg to core : {}", msg.id);
-            s2.send(&mut msg.serialize().unwrap()).unwrap();
+            s2.send(&msg.serialize().unwrap()).unwrap();
         })
         .unwrap();
 
-    let mut options = eframe::NativeOptions::default();
-    options.initial_window_size = Some(egui::Vec2::new(1070.0, 500.0));
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([1070.0, 500.0]),
+        ..Default::default()
+    };
     eframe::run_native(
         &format!("Heroinn FTP - {}", title),
         options,
-        Box::new(|_cc| Box::new(FtpApp::new(sender))),
-    );
+        Box::new(|_cc| Ok(Box::new(FtpApp::new(sender)))),
+    )
+    .unwrap();
 }

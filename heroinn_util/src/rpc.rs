@@ -1,14 +1,15 @@
+//! Minimal request/response RPC used to drive file-system operations remotely.
+
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
-use std::{
-    io::*,
-    sync::{Arc, RwLock},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::{Deserialize, Serialize};
 
 use crate::cur_timestamp_secs;
+use crate::error::{Error, Result};
 
+/// A single RPC request or response.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RpcMessage {
     pub id: String,
@@ -20,23 +21,15 @@ pub struct RpcMessage {
 }
 
 impl RpcMessage {
-    pub fn parse(data: &Vec<u8>) -> Result<Self> {
-        let ret: RpcMessage = serde_json::from_slice(data)?;
-        Ok(ret)
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        Ok(serde_json::from_slice(data)?)
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
-        match serde_json::to_vec(self) {
-            Ok(p) => Ok(p),
-            Err(_) => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "serilize RpcMessage failed",
-                ))
-            }
-        }
+        Ok(serde_json::to_vec(self)?)
     }
 
+    /// Build an outgoing call to `name` with `data` as its arguments.
     pub fn build_call(name: &str, data: Vec<String>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -49,12 +42,15 @@ impl RpcMessage {
     }
 }
 
+/// A synchronous, locally registered RPC implementation.
 pub type RpcType = fn(Vec<String>) -> Result<Vec<String>>;
 
+/// Dispatches incoming calls to registered [`RpcType`] functions.
 pub struct RpcServer {
     funcs: HashMap<String, RpcType>,
 }
 
+/// Tracks outstanding calls until their responses arrive.
 pub struct RpcClient {
     wait_response_list: Arc<RwLock<HashMap<String, RpcMessage>>>,
     is_closed: Arc<AtomicBool>,
@@ -62,56 +58,50 @@ pub struct RpcClient {
 
 impl RpcServer {
     pub fn new() -> Self {
-        RpcServer {
+        Self {
             funcs: HashMap::new(),
         }
     }
 
-    pub fn register(&mut self, name: &String, func: RpcType) {
-        self.funcs.insert(name.clone(), func);
+    pub fn register(&mut self, name: &str, func: RpcType) {
+        self.funcs.insert(name.to_string(), func);
     }
 
+    /// Execute `data` and wrap the outcome in a response message.
     pub fn call(&self, data: &RpcMessage) -> RpcMessage {
-        if self.funcs.contains_key(&data.name) {
-            let func = self.funcs.get(&data.name).unwrap();
+        let func = match self.funcs.get(&data.name) {
+            Some(f) => f,
+            None => return error_response(data, -1, format!("not found rpc [{}]", data.name)),
+        };
 
-            let param = match func(data.data.clone()) {
-                Ok(p) => p,
-                Err(e) => {
-                    let ret = RpcMessage {
-                        id: data.id.clone(),
-                        name: data.name.clone(),
-                        data: vec![],
-                        time: cur_timestamp_secs(),
-                        msg: format!("error : {}", e),
-                        retcode: -2,
-                    };
-
-                    return ret;
-                }
-            };
-            
-
-            RpcMessage {
+        match func(data.data.clone()) {
+            Ok(param) => RpcMessage {
                 id: data.id.clone(),
                 name: data.name.clone(),
                 data: param,
                 time: cur_timestamp_secs(),
                 msg: String::new(),
                 retcode: 0,
-            }
-        } else {
-            
-
-            RpcMessage {
-                id: data.id.clone(),
-                name: data.name.clone(),
-                data: vec![],
-                time: cur_timestamp_secs(),
-                msg: format!("not found rpc [{}]", data.name),
-                retcode: -1,
-            }
+            },
+            Err(e) => error_response(data, -2, format!("error : {}", e)),
         }
+    }
+}
+
+impl Default for RpcServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn error_response(data: &RpcMessage, retcode: i32, msg: String) -> RpcMessage {
+    RpcMessage {
+        id: data.id.clone(),
+        name: data.name.clone(),
+        data: vec![],
+        time: cur_timestamp_secs(),
+        msg,
+        retcode,
     }
 }
 
@@ -123,6 +113,7 @@ impl RpcClient {
         let is_closed = Arc::new(AtomicBool::new(false));
         let wait_response_list_1 = wait_response_list.clone();
         let is_closed_1 = is_closed.clone();
+
         std::thread::Builder::new()
             .name("rpc client gc worker".to_string())
             .spawn(move || {
@@ -130,67 +121,73 @@ impl RpcClient {
                     std::thread::sleep(std::time::Duration::from_secs(
                         RpcClient::RESPONSE_EXPIRED_SECS,
                     ));
-                    if is_closed_1.load(std::sync::atomic::Ordering::Relaxed) {
+                    if is_closed_1.load(Ordering::Relaxed) {
                         break;
                     }
-                    wait_response_list_1.write().unwrap().retain(
-                        |_: &String, v: &mut RpcMessage| {
-                            cur_timestamp_secs() - v.time < RpcClient::RESPONSE_EXPIRED_SECS
-                        },
-                    );
+                    write(&wait_response_list_1).retain(|_: &String, v: &mut RpcMessage| {
+                        cur_timestamp_secs() - v.time < RpcClient::RESPONSE_EXPIRED_SECS
+                    });
                 }
                 log::info!("RpcClient exit");
             })
             .unwrap();
+
         Self {
             wait_response_list,
             is_closed,
         }
     }
 
+    /// Record an outstanding call so [`Self::wait_msg`] can pick up its answer.
     pub fn write(&self, msg: &RpcMessage) {
         let mut v = msg.clone();
         v.time = cur_timestamp_secs();
 
-        self.wait_response_list
-            .write()
-            .unwrap()
-            .insert(msg.id.clone(), v);
+        write(&self.wait_response_list).insert(msg.id.clone(), v);
     }
 
-    pub fn wait_msg(&self, id: &String, timeout_secs: u64) -> Result<RpcMessage> {
-        let cur_time = cur_timestamp_secs();
+    /// Block until the response for `id` arrives, up to `timeout_secs`.
+    pub fn wait_msg(&self, id: &str, timeout_secs: u64) -> Result<RpcMessage> {
+        let start = cur_timestamp_secs();
+
         loop {
-            {
-                let lock = self.wait_response_list.read().unwrap();
-                if lock.contains_key(id) {
-                    break;
-                }
+            if read(&self.wait_response_list).contains_key(id) {
+                break;
+            }
+
+            if cur_timestamp_secs() - start > timeout_secs {
+                log::warn!("rpc [{}] timed out", id);
+                return Err(Error::Timeout);
             }
 
             std::thread::sleep(std::time::Duration::from_millis(100));
-            if cur_timestamp_secs() - cur_time > timeout_secs {
-                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
-            }
         }
 
-        let ret = match self.wait_response_list.read().unwrap().get(id) {
-            Some(p) => p.clone(),
-            None => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "not found",
-                ))
-            }
-        };
-
-        Ok(ret)
+        read(&self.wait_response_list)
+            .get(id)
+            .cloned()
+            .ok_or_else(|| Error::NotFound(format!("rpc response {}", id)))
     }
+}
+
+impl Default for RpcClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Read a lock, recovering the guard when a previous holder panicked.
+fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
+    lock.read().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Write a lock, recovering the guard when a previous holder panicked.
+fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
+    lock.write().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Drop for RpcClient {
     fn drop(&mut self) {
-        self.is_closed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.is_closed.store(true, Ordering::Relaxed);
     }
 }

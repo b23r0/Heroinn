@@ -1,11 +1,71 @@
 [workspace]
+resolver = "3"
 members = [
     "heroinn",
     "heroinn_client",
     "heroinn_core",
-	"heroinn_util",
-	"th3rd/heroinn_ftp"
+    "heroinn_util",
+    "th3rd/heroinn_ftp",
+    # Vendored fork of alacritty that backs the interactive shell: its bin target
+    # is the `heroinn_shell` terminal window the server spawns per session.
+    "th3rd/alacritty-driver/alacritty",
+    "th3rd/alacritty-driver/alacritty_terminal",
+    "th3rd/alacritty-driver/alacritty_config_derive",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["b23r0"]
+
+[workspace.dependencies]
+# Internal crates
+heroinn_util = { path = "heroinn_util" }
+heroinn_core = { path = "heroinn_core" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+log = "0.4"
+simplelog = "0.12"
+simple_logger = "5.2"
+
+# Time / IDs
+chrono = "0.4"
+uuid = { version = "1.26", features = ["v4"] }
+
+# Networking / async
+tokio = "1.53"
+socket2 = "0.6"
+websocket = "0.27"
+rust-raknet = "1.0"
+
+# Filesystem / system information
+sysinfo = "0.39"
+path-absolutize = "4.0"
+md-5 = "0.11"
+systemstat = "0.2"
+os_info = "3.15"
+whoami = "2.1"
+
+# Errors
+thiserror = "2"
+
+# GUI
+eframe = "0.36"
+egui_extras = "0.36"
+image = { version = "0.25", features = ["jpeg", "png", "ico"] }
+rfd = "0.17"
+
+# Platform
+libc = "0.2"
+nix = "0.31"
+
+# Windows-only (kept at legacy versions for now)
+windows = "0.39"
 
 [profile.release.package.heroinn_client]
 strip = true  # Automatically strip symbols from the binary.

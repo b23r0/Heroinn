@@ -1,8 +1,11 @@
-use std::io::*;
+//! Spawning and talking to one `heroinn_shell` worker process.
+
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::{Arc, Mutex};
 
+/// A worker process plus the local socket it connects back on.
 pub struct TermInstance {
     socket: TcpStream,
     pid: u32,
@@ -10,47 +13,51 @@ pub struct TermInstance {
 }
 
 impl TermInstance {
-    pub fn new(driver_path: &String, sub_title: &String) -> Result<TermInstance> {
+    /// Launch `driver_path` and wait for it to connect back.
+    pub fn new(driver_path: &str, sub_title: &str) -> std::io::Result<Self> {
         let server = TcpListener::bind("127.0.0.1:0")?;
         let local_socket_port = format!("{}", server.local_addr().unwrap().port());
 
-        let cmd = if cfg!(target_os = "windows") {
-            let mut cmd = Command::new(driver_path);
+        let mut cmd = Command::new(driver_path);
+
+        if cfg!(target_os = "windows") {
             cmd.args(["--local-socket-port", local_socket_port.as_str()]);
             if !sub_title.is_empty() {
-                cmd.args(["--sub-title", sub_title.as_str()]);
+                cmd.args(["--sub-title", sub_title]);
             }
-            cmd.spawn()
         } else {
-            let mut cmd = Command::new(driver_path);
             cmd.arg("--local-socket-port");
             cmd.arg(local_socket_port.as_str());
             if !sub_title.is_empty() {
                 cmd.arg("--sub-title");
                 cmd.arg(sub_title);
             }
-            cmd.spawn()
-        }?;
+        }
 
+        let cmd = cmd.spawn()?;
         let (socket, _) = server.accept()?;
 
-        Ok(TermInstance {
+        Ok(Self {
             socket,
             pid: cmd.id(),
             cmd: Arc::new(Mutex::new(cmd)),
         })
     }
 
-    pub fn write(&mut self, buf: &[u8]) -> Result<()> {
+    pub fn write(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.socket.write_all(buf)
     }
-    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+
+    pub fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.socket.read(buf)
     }
-    pub fn wait_for_exit(&mut self) -> Result<ExitStatus> {
+
+    pub fn wait_for_exit(&mut self) -> std::io::Result<ExitStatus> {
         self.cmd.lock().unwrap().wait()
     }
-    pub fn close(&self) -> Result<()> {
+
+    /// Terminate the worker process.
+    pub fn close(&self) -> std::io::Result<()> {
         if cfg!(target_os = "windows") {
             #[cfg(target_os = "windows")]
             unsafe {
@@ -62,18 +69,18 @@ impl TermInstance {
                     Ok(h) => windows::Win32::System::Threading::TerminateProcess(h, 1),
                     Err(_) => {
                         return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
+                            std::io::ErrorKind::NotFound,
                             "process not found",
-                        ))
+                        ));
                     }
                 };
             };
         } else {
-            let mut cmd = Command::new("kill");
-            cmd.arg("-9");
-            cmd.arg(self.pid.to_string().as_str());
-            cmd.spawn()?;
-        };
+            Command::new("kill")
+                .arg("-9")
+                .arg(self.pid.to_string())
+                .spawn()?;
+        }
         Ok(())
     }
 }
