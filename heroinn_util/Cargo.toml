@@ -1,23 +1,21 @@
 [package]
 name = "heroinn_util"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 
 [dependencies]
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1"
-log = "0.4"
-uuid = { version = "1.1.2", features = ["v4"] }
-sysinfo = "0.26.4"
-chrono = "0.4.22"
-path-absolutize = "3.0.13"
-md-5 = "0.10.1"
-net2 = "0.2.37"
-websocket = "0.26.5"
-bytes = "1.2.1"
-rand = {version = "0.8.5", features = ["std"]}
-rust-raknet = "0.12.0"
-tokio = "1.20.1"
-lazy_static = "1.4.0"
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+uuid.workspace = true
+sysinfo.workspace = true
+chrono.workspace = true
+path-absolutize.workspace = true
+md-5.workspace = true
+socket2.workspace = true
+websocket.workspace = true
+rust-raknet.workspace = true
+tokio.workspace = true
+thiserror.workspace = true

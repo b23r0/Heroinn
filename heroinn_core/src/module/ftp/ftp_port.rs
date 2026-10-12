@@ -1,8 +1,16 @@
-use std::io::*;
+//! Spawning and talking to one `heroinn_ftp` worker process.
+//!
+//! The worker is addressed through the shared length-prefixed framing helpers,
+//! so both sides agree on the 4-byte big-endian length prefix.
+
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::{Arc, Mutex};
 
+use heroinn_util::Result;
+use heroinn_util::protocol::frame::{read_frame, write_frame};
+
+/// A worker process plus the local socket it connects back on.
 pub struct FtpInstance {
     socket: TcpStream,
     pid: u32,
@@ -10,29 +18,29 @@ pub struct FtpInstance {
 }
 
 impl FtpInstance {
-    pub fn new(driver_path: &String, sub_title: &String) -> Result<FtpInstance> {
+    /// Launch `driver_path` and wait for it to connect back.
+    pub fn new(driver_path: &str, sub_title: &str) -> Result<Self> {
         let server = TcpListener::bind("127.0.0.1:0")?;
         let local_socket_port = format!("{}", server.local_addr().unwrap().port());
 
-        let cmd = if cfg!(target_os = "windows") {
-            let mut cmd = Command::new(driver_path);
+        let mut cmd = Command::new(driver_path);
+
+        if cfg!(target_os = "windows") {
             cmd.args([local_socket_port.as_str()]);
             if !sub_title.is_empty() {
-                cmd.args([sub_title.as_str()]);
+                cmd.args([sub_title]);
             }
-            cmd.spawn()
         } else {
-            let mut cmd = Command::new(driver_path);
             cmd.arg(local_socket_port.as_str());
             if !sub_title.is_empty() {
                 cmd.arg(sub_title);
             }
-            cmd.spawn()
-        }?;
+        }
 
+        let cmd = cmd.spawn()?;
         let (socket, _) = server.accept()?;
 
-        Ok(FtpInstance {
+        Ok(Self {
             socket,
             pid: cmd.id(),
             cmd: Arc::new(Mutex::new(cmd)),
@@ -40,29 +48,19 @@ impl FtpInstance {
     }
 
     pub fn write(&mut self, buf: &[u8]) -> Result<()> {
-        let size = buf.len() as u32;
-        let size = size.to_be_bytes();
-
-        self.socket.write_all(&size)?;
-        self.socket.write_all(buf)
+        write_frame(&mut self.socket, buf)
     }
+
     pub fn read(&mut self) -> Result<Vec<u8>> {
-        let mut size_buf = [0u8; 4];
-
-        self.socket.read_exact(&mut size_buf)?;
-
-        let size = u32::from_be_bytes(size_buf);
-
-        let mut buf = vec![0u8; size as usize];
-
-        self.socket.read_exact(&mut buf)?;
-
-        Ok(buf)
+        read_frame(&mut self.socket)
     }
-    pub fn wait_for_exit(&mut self) -> Result<ExitStatus> {
+
+    pub fn wait_for_exit(&mut self) -> std::io::Result<ExitStatus> {
         self.cmd.lock().unwrap().wait()
     }
-    pub fn close(&self) -> Result<()> {
+
+    /// Terminate the worker process.
+    pub fn close(&self) -> std::io::Result<()> {
         if cfg!(target_os = "windows") {
             #[cfg(target_os = "windows")]
             unsafe {
@@ -74,24 +72,20 @@ impl FtpInstance {
                     Ok(h) => windows::Win32::System::Threading::TerminateProcess(h, 1),
                     Err(_) => {
                         return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
+                            std::io::ErrorKind::NotFound,
                             "process not found",
-                        ))
+                        ));
                     }
                 };
             };
         } else {
-            let mut cmd = Command::new("kill");
-            cmd.arg("-9");
-            cmd.arg(self.pid.to_string().as_str());
-            cmd.spawn()?;
-        };
+            Command::new("kill")
+                .arg("-9")
+                .arg(self.pid.to_string())
+                .spawn()?;
+        }
         Ok(())
     }
-}
-
-pub fn new_ftp(driver_path: &String, sub_title: &String) -> Result<FtpInstance> {
-    FtpInstance::new(driver_path, sub_title)
 }
 
 impl Clone for FtpInstance {

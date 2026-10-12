@@ -1,145 +1,171 @@
+//! Transport layer.
+//!
+//! Two closed enums cover everything the rest of the workspace needs:
+//!
+//! * [`Transport`] — an outbound connection used by clients and tunnels.
+//! * [`Listener`] — an inbound server used by the GUI to accept clients.
+//!
+//! Both wrap the three concrete implementations (plain TCP, WebSocket and
+//! reliable UDP) and dispatch to them, so callers never deal with a trait
+//! object or an `Option`-per-protocol struct.
+
+pub mod frame;
 pub mod http;
 pub mod tcp;
 pub mod udp;
-use std::{
-    io::*,
-    net::SocketAddr,
-    ops::{Deref, DerefMut},
-};
 
-use crate::{packet::Message, HeroinnProtocol};
+use std::net::SocketAddr;
+use std::sync::Arc;
 
-use self::{http::WSConnection, tcp::TcpConnection, udp::UDPConnection};
+use crate::error::Result;
+use crate::packet::Message;
+use crate::HeroinnProtocol;
 
+use self::http::{WSConnection, WSServer};
+use self::tcp::{TcpConnection, TcpServer};
+use self::udp::{UDPConnection, UDPServer};
+
+/// Sentinel written before a 2-byte port when a peer asks for a reverse tunnel.
 static TUNNEL_FLAG: [u8; 4] = [0x38, 0x38, 0x38, 0x38];
 
-pub trait Client {
-    fn connect(address: &str) -> Result<Self>
-    where
-        Self: Sized;
-    fn tunnel(remote_addr: &str, server_local_port: u16) -> Result<Self>
-    where
-        Self: Sized;
-    fn recv(&mut self) -> Result<Vec<u8>>;
-    fn send(&mut self, buf: &mut [u8]) -> Result<()>;
-    fn local_addr(&self) -> Result<SocketAddr>;
-    fn close(&mut self);
+/// Callback invoked for every decoded inbound message.
+pub type MessageHandler = Arc<dyn Fn(Message) + Send + Sync>;
+
+/// Outbound connection to a peer.
+pub enum Transport {
+    Tcp(TcpConnection),
+    Http(WSConnection),
+    Udp(UDPConnection),
 }
 
-pub trait Server {
-    fn new<
-        CBCB: 'static + Fn(Message) + Send + Copy,
-        CB: 'static + Fn(HeroinnProtocol, Vec<u8>, SocketAddr, CBCB) + Send,
-    >(
-        address: &str,
-        cb_data: CB,
-        cbcb: CBCB,
-    ) -> std::io::Result<Self>
-    where
-        Self: Sized;
-
-    fn local_addr(&self) -> Result<SocketAddr>;
-    fn sendto(&mut self, peer_addr: &SocketAddr, buf: &[u8]) -> Result<()>;
-    fn contains_addr(&mut self, peer_addr: &SocketAddr) -> bool;
-    fn close(&mut self);
-}
-
-pub struct ClientWrapper {
-    typ: HeroinnProtocol,
-    tcp_client: Option<TcpConnection>,
-    http_client: Option<WSConnection>,
-    udp_client: Option<UDPConnection>,
-}
-
-impl Deref for ClientWrapper {
-    type Target = dyn Client;
-
-    fn deref(&self) -> &Self::Target {
-        match self.typ {
-            HeroinnProtocol::TCP => self.tcp_client.as_ref().unwrap(),
-            HeroinnProtocol::HTTP => self.http_client.as_ref().unwrap(),
-            HeroinnProtocol::UDP => self.udp_client.as_ref().unwrap(),
-            HeroinnProtocol::Unknow => panic!("unknow protocol"),
-        }
+impl Transport {
+    /// Dial a peer over `protocol`.
+    pub fn connect(protocol: &HeroinnProtocol, address: &str) -> Result<Self> {
+        Ok(match protocol {
+            HeroinnProtocol::TCP => Self::Tcp(TcpConnection::connect(address)?),
+            HeroinnProtocol::HTTP => Self::Http(WSConnection::connect(address)?),
+            HeroinnProtocol::UDP => Self::Udp(UDPConnection::connect(address)?),
+        })
     }
-}
 
-impl DerefMut for ClientWrapper {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match self.typ {
-            HeroinnProtocol::TCP => self.tcp_client.as_mut().unwrap(),
-            HeroinnProtocol::HTTP => self.http_client.as_mut().unwrap(),
-            HeroinnProtocol::UDP => self.udp_client.as_mut().unwrap(),
-            HeroinnProtocol::Unknow => panic!("unknow protocol"),
-        }
-    }
-}
-
-impl Clone for ClientWrapper {
-    fn clone(&self) -> Self {
-        Self {
-            typ: self.typ.clone(),
-            tcp_client: self.tcp_client.clone(),
-            http_client: self.http_client.clone(),
-            udp_client: self.udp_client.clone(),
-        }
-    }
-}
-
-impl ClientWrapper {
-    pub fn connect(typ: &HeroinnProtocol, address: &str) -> Result<Self> {
-        match typ {
+    /// Dial `remote_addr` and ask it to tunnel to `server_local_port`.
+    pub fn tunnel(
+        protocol: &HeroinnProtocol,
+        remote_addr: &str,
+        server_local_port: u16,
+    ) -> Result<Self> {
+        Ok(match protocol {
             HeroinnProtocol::TCP => {
-                let client = TcpConnection::connect(address)?;
-                Ok(Self {
-                    typ: typ.clone(),
-                    tcp_client: Some(client),
-                    http_client: None,
-                    udp_client: None,
-                })
+                Self::Tcp(TcpConnection::tunnel(remote_addr, server_local_port)?)
             }
             HeroinnProtocol::HTTP => {
-                let client = WSConnection::connect(address)?;
-                Ok(Self {
-                    typ: typ.clone(),
-                    tcp_client: None,
-                    http_client: Some(client),
-                    udp_client: None,
-                })
+                Self::Http(WSConnection::tunnel(remote_addr, server_local_port)?)
             }
             HeroinnProtocol::UDP => {
-                let client = UDPConnection::connect(address)?;
-                Ok(Self {
-                    typ: typ.clone(),
-                    tcp_client: None,
-                    http_client: None,
-                    udp_client: Some(client),
-                })
+                Self::Udp(UDPConnection::tunnel(remote_addr, server_local_port)?)
             }
-            HeroinnProtocol::Unknow => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "invaild protocol type",
-                ))
-            }
+        })
+    }
+
+    pub fn recv(&mut self) -> Result<Vec<u8>> {
+        match self {
+            Self::Tcp(c) => c.recv(),
+            Self::Http(c) => c.recv(),
+            Self::Udp(c) => c.recv(),
+        }
+    }
+
+    pub fn send(&mut self, buf: &[u8]) -> Result<()> {
+        match self {
+            Self::Tcp(c) => c.send(buf),
+            Self::Http(c) => c.send(buf),
+            Self::Udp(c) => c.send(buf),
+        }
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        match self {
+            Self::Tcp(c) => c.local_addr(),
+            Self::Http(c) => c.local_addr(),
+            Self::Udp(c) => c.local_addr(),
+        }
+    }
+
+    pub fn close(&mut self) {
+        match self {
+            Self::Tcp(c) => c.close(),
+            Self::Http(c) => c.close(),
+            Self::Udp(c) => c.close(),
         }
     }
 }
 
-pub fn create_tunnel(
-    addr: &str,
-    protocol: &HeroinnProtocol,
-    server_local_port: u16,
-) -> Result<Box<dyn Client>> {
-    Ok(match protocol {
-        HeroinnProtocol::TCP => Box::new(TcpConnection::tunnel(addr, server_local_port)?),
-        HeroinnProtocol::HTTP => Box::new(WSConnection::tunnel(addr, server_local_port)?),
-        HeroinnProtocol::UDP => Box::new(UDPConnection::tunnel(addr, server_local_port)?),
-        HeroinnProtocol::Unknow => {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "not found",
-            ));
+impl Clone for Transport {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Tcp(c) => Self::Tcp(c.clone()),
+            Self::Http(c) => Self::Http(c.clone()),
+            Self::Udp(c) => Self::Udp(c.clone()),
         }
-    })
+    }
+}
+
+/// Inbound server accepting peers on one protocol.
+pub enum Listener {
+    Tcp(TcpServer),
+    Http(WSServer),
+    Udp(UDPServer),
+}
+
+impl Listener {
+    /// Bind `0.0.0.0:port` and deliver every decoded message to `on_message`.
+    pub fn bind(protocol: &HeroinnProtocol, port: u16, on_message: MessageHandler) -> Result<Self> {
+        let address = format!("0.0.0.0:{}", port);
+
+        Ok(match protocol {
+            HeroinnProtocol::TCP => Self::Tcp(TcpServer::new(&address, on_message)?),
+            HeroinnProtocol::HTTP => Self::Http(WSServer::new(&address, on_message)?),
+            HeroinnProtocol::UDP => Self::Udp(UDPServer::new(&address, on_message)?),
+        })
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        match self {
+            Self::Tcp(s) => s.local_addr(),
+            Self::Http(s) => s.local_addr(),
+            Self::Udp(s) => s.local_addr(),
+        }
+    }
+
+    pub fn sendto(&mut self, peer_addr: &SocketAddr, buf: &[u8]) -> Result<()> {
+        match self {
+            Self::Tcp(s) => s.sendto(peer_addr, buf),
+            Self::Http(s) => s.sendto(peer_addr, buf),
+            Self::Udp(s) => s.sendto(peer_addr, buf),
+        }
+    }
+
+    pub fn contains_addr(&mut self, peer_addr: &SocketAddr) -> bool {
+        match self {
+            Self::Tcp(s) => s.contains_addr(peer_addr),
+            Self::Http(s) => s.contains_addr(peer_addr),
+            Self::Udp(s) => s.contains_addr(peer_addr),
+        }
+    }
+
+    pub fn close(&mut self) {
+        match self {
+            Self::Tcp(s) => s.close(),
+            Self::Http(s) => s.close(),
+            Self::Udp(s) => s.close(),
+        }
+    }
+
+    pub fn proto(&self) -> HeroinnProtocol {
+        match self {
+            Self::Tcp(_) => HeroinnProtocol::TCP,
+            Self::Http(_) => HeroinnProtocol::HTTP,
+            Self::Udp(_) => HeroinnProtocol::UDP,
+        }
+    }
 }

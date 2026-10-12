@@ -1,29 +1,23 @@
 [package]
 name = "heroinn_client"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
 
 [dependencies]
-heroinn_util = {path = "../heroinn_util"}
-simplelog = "0.12.0"
-log = "0.4"
-uuid = { version = "1.1.2" , features = ["v4"]}
-systemstat = "0.2.0"
-os_info = "3.5.0"
-lazy_static = "1.4.0"
-whoami = "1.2.1"
-#openssl-sys = "0.9.75"
+heroinn_util.workspace = true
+simplelog.workspace = true
+log.workspace = true
+uuid.workspace = true
+systemstat.workspace = true
+os_info.workspace = true
+whoami.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-conpty = {git = "https://github.com/b23r0/conpty.git"}
-windows = {version = "0.39.0" , features = ["Win32_Foundation","Win32_System_Threading", "Win32_UI_WindowsAndMessaging" , "Win32_System_Console"]}
+conpty = { git = "https://github.com/b23r0/conpty.git" }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_Console"] }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-nix = "0.25.0"
-ioctl-rs = "0.2"
-libc = "0.2.126"
-
-#[features]
-#vendored = ["openssl-sys/vendored"]
+nix = { workspace = true, features = ["term", "process"] }
+libc.workspace = true

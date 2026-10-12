@@ -1,27 +1,29 @@
-use super::{Client, Server};
-use crate::{
-    protocol::{tcp::TcpConnection, TUNNEL_FLAG},
-    HeroinnProtocol,
-};
-use std::{
-    collections::HashMap,
-    net::{SocketAddr, TcpStream},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
-};
-use websocket::{
-    sync::{Reader, Writer},
-    OwnedMessage,
-};
+//! WebSocket transport (the `websocket` crate), used both for plain connections
+//! and for reverse tunnels.
 
+use std::collections::HashMap;
+use std::net::{SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use websocket::sync::{Reader, Writer};
+use websocket::OwnedMessage;
+
+use crate::error::{Error, Result};
+use crate::packet::Message;
+use crate::protocol::{MessageHandler, TUNNEL_FLAG};
+use crate::HeroinnProtocol;
+
+use super::tcp::TcpConnection;
+
+/// Accepting side of a WebSocket listener.
 pub struct WSServer {
     local_addr: SocketAddr,
     closed: Arc<AtomicBool>,
     connections: Arc<Mutex<HashMap<SocketAddr, Writer<TcpStream>>>>,
 }
 
+/// One outbound WebSocket connection.
 pub struct WSConnection {
     reader: Option<Arc<Mutex<Reader<TcpStream>>>>,
     writer: Option<Arc<Mutex<Writer<TcpStream>>>>,
@@ -29,18 +31,9 @@ pub struct WSConnection {
     closed: Arc<AtomicBool>,
 }
 
-impl Server for WSServer {
-    fn new<
-        CBCB: 'static + Fn(crate::packet::Message) + Send + Copy,
-        CB: 'static + Fn(crate::HeroinnProtocol, Vec<u8>, SocketAddr, CBCB) + Send,
-    >(
-        address: &str,
-        cb_data: CB,
-        cbcb: CBCB,
-    ) -> std::io::Result<Self>
-    where
-        Self: Sized,
-    {
+impl WSServer {
+    /// Bind `address` and pass every decoded message to `on_message`.
+    pub fn new(address: &str, on_message: MessageHandler) -> Result<Self> {
         let mut server = websocket::sync::Server::bind(address)?;
         server.set_nonblocking(true).unwrap();
 
@@ -52,15 +45,20 @@ impl Server for WSServer {
 
         let connections_1 = connections.clone();
         let closed_1 = closed.clone();
-        let cb_data = Arc::new(Mutex::new(cb_data));
         std::thread::Builder::new()
-            .name(format!("ws main worker : {}", local_addr.clone()))
+            .name(format!("ws listener : {}", local_addr))
             .spawn(move || {
                 loop {
                     let client = match server.accept() {
-                        Ok(p) => p.accept().unwrap(),
+                        Ok(p) => match p.accept() {
+                            Ok(c) => c,
+                            Err(e) => {
+                                log::warn!("ws handshake failed : {:?}", e);
+                                continue;
+                            }
+                        },
                         Err(_) => {
-                            if closed_1.load(std::sync::atomic::Ordering::Relaxed) {
+                            if closed_1.load(Ordering::Relaxed) {
                                 break;
                             }
 
@@ -70,153 +68,11 @@ impl Server for WSServer {
                     };
 
                     let connections_2 = connections_1.clone();
-                    let cb_data = cb_data.clone();
+                    let on_message = on_message.clone();
                     std::thread::Builder::new()
-                        .name(format!("ws client worker : {}", local_addr.clone()))
+                        .name(format!("ws connection : {}", local_addr))
                         .spawn(move || {
-                            client.set_nonblocking(false).unwrap();
-                            let remote_addr = client.peer_addr().unwrap();
-
-                            log::info!("ws accept from : {}", remote_addr);
-
-                            let (mut receiver, sender) = client.split().unwrap();
-
-                            {
-                                let mut conns = connections_2.lock().unwrap();
-                                conns.insert(remote_addr, sender);
-                            }
-
-                            for message in receiver.incoming_messages() {
-                                let message = match message {
-                                    Ok(p) => p,
-                                    Err(e) => {
-                                        log::info!("ws connection incomming msg error : {}", e);
-                                        break;
-                                    }
-                                };
-
-                                match message {
-                                    OwnedMessage::Close(_) => {
-                                        log::info!("ws connection closed : {}", remote_addr);
-                                        break;
-                                    }
-                                    OwnedMessage::Binary(buf) => {
-                                        if buf.len() == 6 && buf[..4] == TUNNEL_FLAG {
-                                            let mut sender = connections_2
-                                                .lock()
-                                                .unwrap()
-                                                .remove(&remote_addr)
-                                                .unwrap();
-
-                                            let port = [buf[4], buf[5]];
-                                            let port = u16::from_be_bytes(port);
-
-                                            let full_addr = format!("127.0.0.1:{}", port);
-                                            let tunnel_client =
-                                                match TcpConnection::connect(&full_addr) {
-                                                    Ok(p) => p,
-                                                    Err(e) => {
-                                                        log::error!(
-                                                            "tunnel connect failed : {}",
-                                                            e
-                                                        );
-                                                        break;
-                                                    }
-                                                };
-
-                                            let mut tunnel_client_1 = tunnel_client.clone();
-                                            std::thread::Builder::new()
-                                                .name(format!(
-                                                    "ws tunnel worker1 : {}",
-                                                    tunnel_client.local_addr().unwrap()
-                                                ))
-                                                .spawn(move || {
-                                                    loop {
-                                                        let buf = match tunnel_client_1.recv() {
-                                                            Ok(p) => p,
-                                                            Err(e) => {
-                                                                log::error!(
-                                                                    "tunnel read failed : {}",
-                                                                    e
-                                                                );
-                                                                break;
-                                                            }
-                                                        };
-
-                                                        if buf.is_empty() {
-                                                            break;
-                                                        }
-
-                                                        if let Err(e) = sender.send_message(
-                                                            &OwnedMessage::Binary(buf),
-                                                        ) {
-                                                            log::error!(
-                                                                "ws sender error : {}",
-                                                                e
-                                                            );
-                                                            break;
-                                                        }
-                                                    }
-                                                    log::debug!("ws tunnel1 finished!");
-                                                })
-                                                .unwrap();
-
-                                            let mut tunnel_client_2 = tunnel_client.clone();
-                                            std::thread::Builder::new()
-                                                .name(format!(
-                                                    "ws tunnel worker2 : {}",
-                                                    tunnel_client.local_addr().unwrap()
-                                                ))
-                                                .spawn(move || {
-                                                    loop {
-                                                        let mut buf = match receiver
-                                                            .recv_message()
-                                                        {
-                                                            Ok(p) => match p {
-                                                                OwnedMessage::Binary(p) => p,
-                                                                OwnedMessage::Close(_) => {
-                                                                    break;
-                                                                }
-                                                                _ => continue,
-                                                            },
-                                                            Err(e) => {
-                                                                log::error!(
-                                                                    "ws receiver error : {}",
-                                                                    e
-                                                                );
-                                                                break;
-                                                            }
-                                                        };
-
-                                                        if let Err(e) =
-                                                            tunnel_client_2.send(&mut buf)
-                                                        {
-                                                            log::error!(
-                                                                "ws sender error : {}",
-                                                                e
-                                                            );
-                                                            break;
-                                                        }
-                                                    }
-
-                                                    log::debug!("ws tunnel2 finished!");
-                                                })
-                                                .unwrap();
-
-                                            break;
-                                        }
-
-                                        cb_data.lock().unwrap()(
-                                            HeroinnProtocol::HTTP,
-                                            buf,
-                                            remote_addr,
-                                            cbcb,
-                                        );
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            connections_2.lock().unwrap().remove(&remote_addr);
+                            handle_connection(client, &on_message, &connections_2);
                             log::info!("ws client worker finished");
                         })
                         .unwrap();
@@ -224,12 +80,8 @@ impl Server for WSServer {
 
                 let mut conns = connections_1.lock().unwrap();
                 for i in conns.values_mut() {
-                    match i.shutdown_all() {
-                        Ok(_) => {}
-                        Err(_) => {}
-                    };
+                    let _ = i.shutdown_all();
                 }
-
                 conns.clear();
 
                 log::info!("ws main worker finished");
@@ -243,69 +95,169 @@ impl Server for WSServer {
         })
     }
 
-    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+    pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.local_addr)
     }
 
-    fn sendto(&mut self, peer_addr: &SocketAddr, buf: &[u8]) -> std::io::Result<()> {
-        match self.connections.lock().unwrap().get_mut(peer_addr) {
-            Some(k) => {
-                let msg = OwnedMessage::Binary(buf.to_vec());
-                match k.send_message(&msg) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Interrupted,
-                            format!("ws send msg error : {}", e),
-                        ));
-                    }
-                };
-                Ok(())
-            }
-            None => Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "not found client",
-            )),
-        }
+    pub fn sendto(&mut self, peer_addr: &SocketAddr, buf: &[u8]) -> Result<()> {
+        let mut connections = self.connections.lock().unwrap();
+        let writer = connections
+            .get_mut(peer_addr)
+            .ok_or_else(|| Error::NotFound(format!("ws client {}", peer_addr)))?;
+
+        writer
+            .send_message(&OwnedMessage::Binary(buf.to_vec()))
+            .map_err(|e| Error::Other(format!("ws send msg error : {}", e)))
     }
 
-    fn contains_addr(&mut self, peer_addr: &SocketAddr) -> bool {
+    pub fn contains_addr(&mut self, peer_addr: &SocketAddr) -> bool {
         self.connections.lock().unwrap().contains_key(peer_addr)
     }
 
-    fn close(&mut self) {
-        self.closed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+    pub fn close(&mut self) {
+        self.closed.store(true, Ordering::Relaxed);
     }
 }
 
-impl Drop for WSServer {
-    fn drop(&mut self) {
-        self.close();
-    }
-}
+/// Serve one accepted WebSocket connection until it closes or tunnels.
+fn handle_connection(
+    client: websocket::sync::Client<TcpStream>,
+    on_message: &MessageHandler,
+    connections: &Arc<Mutex<HashMap<SocketAddr, Writer<TcpStream>>>>,
+) {
+    client.set_nonblocking(false).unwrap();
+    let remote_addr = client.peer_addr().unwrap();
 
-impl Client for WSConnection {
-    fn connect(address: &str) -> std::io::Result<Self>
-    where
-        Self: Sized,
-    {
-        let s = match websocket::ClientBuilder::new(&format!("ws://{}", address))
-            .unwrap()
-            .connect_insecure()
-        {
+    log::info!("ws accept from : {}", remote_addr);
+
+    let Ok((mut receiver, sender)) = client.split() else {
+        log::warn!("failed to split ws connection {}", remote_addr);
+        return;
+    };
+
+    connections.lock().unwrap().insert(remote_addr, sender);
+
+    for message in receiver.incoming_messages() {
+        let message = match message {
             Ok(p) => p,
             Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    format!("ws connect error : {}", e),
-                ));
+                log::info!("ws connection incomming msg error : {}", e);
+                break;
             }
         };
 
-        let local_addr = s.local_addr().unwrap();
+        match message {
+            OwnedMessage::Close(_) => {
+                log::info!("ws connection closed : {}", remote_addr);
+                break;
+            }
+            OwnedMessage::Binary(buf) => {
+                if buf.len() == 6 && buf[..4] == TUNNEL_FLAG {
+                    let sender = match connections.lock().unwrap().remove(&remote_addr) {
+                        Some(s) => s,
+                        None => break,
+                    };
 
-        let (reader, writer) = s.split().unwrap();
+                    let port = u16::from_be_bytes([buf[4], buf[5]]);
+                    serve_tunnel(receiver, sender, remote_addr, port);
+                    break;
+                }
+
+                match Message::new(remote_addr, HeroinnProtocol::HTTP, &buf) {
+                    Ok(msg) => on_message(msg),
+                    Err(e) => log::warn!("failed to decode ws message from {}: {}", remote_addr, e),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    connections.lock().unwrap().remove(&remote_addr);
+}
+
+/// Pump bytes both ways between the WebSocket peer and a local TCP connection.
+fn serve_tunnel(
+    mut receiver: Reader<TcpStream>,
+    sender: Writer<TcpStream>,
+    remote_addr: SocketAddr,
+    port: u16,
+) {
+    let full_addr = format!("127.0.0.1:{}", port);
+    let tunnel_client = match TcpConnection::connect(&full_addr) {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("tunnel connect failed : {}", e);
+            return;
+        }
+    };
+
+    let mut local_to_ws = tunnel_client.clone();
+    let mut sender = sender;
+    std::thread::Builder::new()
+        .name(format!("ws tunnel worker1 : {}", full_addr))
+        .spawn(move || {
+            loop {
+                let buf = match local_to_ws.recv() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::error!("tunnel read failed : {}", e);
+                        break;
+                    }
+                };
+
+                if buf.is_empty() {
+                    break;
+                }
+
+                if let Err(e) = sender.send_message(&OwnedMessage::Binary(buf)) {
+                    log::error!("ws sender error : {}", e);
+                    break;
+                }
+            }
+            log::debug!("ws tunnel1 finished!");
+        })
+        .unwrap();
+
+    let mut ws_to_local = tunnel_client;
+    std::thread::Builder::new()
+        .name(format!("ws tunnel worker2 : {}", full_addr))
+        .spawn(move || {
+            loop {
+                let buf = match receiver.recv_message() {
+                    Ok(OwnedMessage::Binary(p)) => p,
+                    Ok(OwnedMessage::Close(_)) => break,
+                    Ok(_) => continue,
+                    Err(e) => {
+                        log::error!("ws receiver error : {}", e);
+                        break;
+                    }
+                };
+
+                if let Err(e) = ws_to_local.send(&buf) {
+                    log::error!("ws sender error : {}", e);
+                    break;
+                }
+            }
+
+            log::debug!("ws tunnel2 finished!");
+        })
+        .unwrap();
+
+    log::info!("ws tunnel established for {}", remote_addr);
+}
+
+impl WSConnection {
+    /// Dial `address`.
+    pub fn connect(address: &str) -> Result<Self> {
+        let s = websocket::ClientBuilder::new(&format!("ws://{}", address))
+            .map_err(|e| Error::Other(format!("ws url error : {}", e)))?
+            .connect_insecure()
+            .map_err(|e| Error::Other(format!("ws connect error : {}", e)))?;
+
+        let local_addr = s.local_addr().unwrap();
+        let (reader, writer) = s
+            .split()
+            .map_err(|e| Error::Other(format!("ws split error : {}", e)))?;
 
         Ok(Self {
             reader: Some(Arc::new(Mutex::new(reader))),
@@ -315,121 +267,74 @@ impl Client for WSConnection {
         })
     }
 
-    fn tunnel(remote_addr: &str, server_local_port: u16) -> std::io::Result<Self>
-    where
-        Self: Sized,
-    {
+    /// Dial `remote_addr` and ask it to tunnel to `server_local_port`.
+    pub fn tunnel(remote_addr: &str, server_local_port: u16) -> Result<Self> {
         log::info!("start tunnel [{}] [{}]", remote_addr, server_local_port);
-        let s = match websocket::ClientBuilder::new(&format!("ws://{}", remote_addr))
-            .unwrap()
-            .connect_insecure()
-        {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    format!("ws connect error : {}", e),
-                ));
-            }
-        };
 
-        let local_addr = s.local_addr().unwrap();
+        let mut ret = Self::connect(remote_addr)?;
 
         let mut buf = TUNNEL_FLAG.to_vec();
         buf.append(&mut server_local_port.to_be_bytes().to_vec());
-
-        let (reader, writer) = s.split().unwrap();
-
-        let mut ret = Self {
-            reader: Some(Arc::new(Mutex::new(reader))),
-            writer: Some(Arc::new(Mutex::new(writer))),
-            closed: Arc::new(AtomicBool::new(false)),
-            local_addr,
-        };
-
-        ret.send(&mut buf)?;
+        ret.send(&buf)?;
 
         Ok(ret)
     }
 
-    fn recv(&mut self) -> std::io::Result<Vec<u8>> {
-        if self.closed.load(Ordering::Relaxed) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "socket closed",
-            ));
-        }
-
-        let s = match self.reader.as_mut() {
-            Some(p) => p,
-            None => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "socket closed",
-                ));
-            }
+    pub fn recv(&mut self) -> Result<Vec<u8>> {
+        let msg = {
+            let reader = self.reader()?;
+            reader.lock().unwrap().recv_message()
         };
 
-        let mut s_lock = s.lock().unwrap();
-
-        match s_lock.recv_message() {
-            Ok(msg) => match msg {
-                OwnedMessage::Binary(buf) => Ok(buf),
-                OwnedMessage::Close(_) => {
-                    drop(s_lock);
-                    self.close();
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::Interrupted,
-                        "ws closed".to_string(),
-                    ))
-                }
-                _ => Ok(vec![]),
-            },
-            Err(e) => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    format!("ws receive error : {}", e),
-                ))
+        match msg {
+            Ok(OwnedMessage::Binary(buf)) => Ok(buf),
+            Ok(OwnedMessage::Close(_)) => {
+                self.close();
+                Err(Error::Other("ws closed".to_string()))
             }
+            Ok(_) => Ok(vec![]),
+            Err(e) => Err(Error::Other(format!("ws receive error : {}", e))),
         }
     }
 
-    fn send(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        if self.closed.load(Ordering::Relaxed) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "socket closed",
-            ));
-        }
+    pub fn send(&mut self, buf: &[u8]) -> Result<()> {
+        let writer = self.writer()?;
 
-        let s = match self.writer.as_mut() {
-            Some(p) => p,
-            None => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "socket closed",
-                ));
-            }
-        };
-
-        let msg = OwnedMessage::Binary(buf.to_vec());
-        if let Err(e) = s.lock().unwrap().send_message(&msg) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                format!("ws send msg error : {}", e),
-            ));
-        };
-        Ok(())
+        writer
+            .lock()
+            .unwrap()
+            .send_message(&OwnedMessage::Binary(buf.to_vec()))
+            .map_err(|e| Error::Other(format!("ws send msg error : {}", e)))
     }
 
-    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+    pub fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.local_addr)
     }
 
-    fn close(&mut self) {
+    pub fn close(&mut self) {
         self.closed.store(true, Ordering::Relaxed);
         self.reader = None;
         self.writer = None;
+    }
+
+    fn reader(&self) -> Result<&Arc<Mutex<Reader<TcpStream>>>> {
+        if self.closed.load(Ordering::Relaxed) {
+            return Err(Error::Other("socket closed".to_string()));
+        }
+
+        self.reader
+            .as_ref()
+            .ok_or_else(|| Error::Other("socket closed".to_string()))
+    }
+
+    fn writer(&self) -> Result<&Arc<Mutex<Writer<TcpStream>>>> {
+        if self.closed.load(Ordering::Relaxed) {
+            return Err(Error::Other("socket closed".to_string()));
+        }
+
+        self.writer
+            .as_ref()
+            .ok_or_else(|| Error::Other("socket closed".to_string()))
     }
 }
 
@@ -444,6 +349,12 @@ impl Clone for WSConnection {
     }
 }
 
+impl Drop for WSServer {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
 impl Drop for WSConnection {
     fn drop(&mut self) {
         self.reader = None;
@@ -453,22 +364,24 @@ impl Drop for WSConnection {
 
 #[test]
 fn test_ws_tunnel() {
-    let server = WSServer::new("127.0.0.1:0", |_, _, _, _| {}, |_| {}).unwrap();
+    let mut server = WSServer::new("127.0.0.1:0", Arc::new(|_| {})).unwrap();
     let server2 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let remote_local_port = server2.local_addr().unwrap().port();
 
     let remote = &format!("127.0.0.1:{}", server.local_addr().unwrap().port());
     let mut client1 = WSConnection::tunnel(remote, remote_local_port).unwrap();
 
-    let (mut client2, _) = super::tcp::TcpConnection::tunnel_server(server2, 10).unwrap();
+    let (mut client2, _) = TcpConnection::tunnel_server(server2, 10).unwrap();
 
     for _ in 0..3 {
-        client1.send(&mut [0, 1, 2, 3]).unwrap();
+        client1.send(&[0, 1, 2, 3]).unwrap();
         let buf = client2.recv().unwrap();
         assert!(buf == [0, 1, 2, 3]);
 
-        client2.send(&mut [4, 5, 6, 7]).unwrap();
+        client2.send(&[4, 5, 6, 7]).unwrap();
         let buf = client1.recv().unwrap();
         assert!(buf == [4, 5, 6, 7]);
     }
+
+    server.close();
 }

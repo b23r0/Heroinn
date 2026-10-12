@@ -1,38 +1,35 @@
-use serde::{Deserialize, Serialize};
-use std::{io::*, net::SocketAddr};
+//! Wire packets: the envelope ([`Message`]) plus the payload types sent over it.
 
+use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+
+use crate::error::{Error, Result};
 use crate::{session::SessionPacket, HeroinnProtocol};
 
+/// Envelope shared by every message: a client id and an opaque JSON payload.
 #[derive(Serialize, Deserialize, Debug)]
 struct BasePacket {
     clientid: String,
     data: String,
 }
 
+/// Request asking the peer to open a reverse tunnel to `port` on its side.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TunnelRequest {
     pub port: u16,
 }
 
 impl TunnelRequest {
-    pub fn parse(data: &Vec<u8>) -> Result<Self> {
-        let ret: TunnelRequest = serde_json::from_slice(data)?;
-        Ok(ret)
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        Ok(serde_json::from_slice(data)?)
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
-        match serde_json::to_vec(self) {
-            Ok(p) => Ok(p),
-            Err(_) => {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "serilize TunnelRequest packet failed",
-                ))
-            }
-        }
+        Ok(serde_json::to_vec(self)?)
     }
 }
 
+/// Host metadata reported by a client when it first connects.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HostInfo {
     pub ip: String,
@@ -42,6 +39,7 @@ pub struct HostInfo {
     pub remark: String,
 }
 
+/// Periodic traffic counters reported by a client.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Heartbeat {
     pub time: u64,
@@ -49,6 +47,7 @@ pub struct Heartbeat {
     pub out_rate: u64,
 }
 
+/// A decoded envelope, tagged with the transport it arrived on.
 pub struct Message {
     id: u8,
     peer_addr: SocketAddr,
@@ -59,20 +58,14 @@ pub struct Message {
 }
 
 impl Message {
+    /// Decode a raw frame: one id byte followed by a JSON [`BasePacket`].
     pub fn new(peer_addr: SocketAddr, proto: HeroinnProtocol, buf: &[u8]) -> Result<Self> {
-        let id = buf[0];
+        let id = *buf.first().ok_or(Error::Malformed("empty frame"))?;
 
-        let base_str = match String::from_utf8(buf[1..].to_vec()) {
-            Ok(p) => p,
-            Err(_) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "parse base packet string error",
-                ))
-            }
-        };
+        let base_str = std::str::from_utf8(&buf[1..])
+            .map_err(|_| Error::Malformed("base packet is not utf-8"))?;
 
-        let base: BasePacket = serde_json::from_str(&base_str)?;
+        let base: BasePacket = serde_json::from_str(base_str)?;
 
         Ok(Self {
             id,
@@ -84,19 +77,16 @@ impl Message {
         })
     }
 
-    pub fn build<T: Serialize>(id: u8, clientid: &String, data: T) -> Result<Vec<u8>> {
-        let mut ret = vec![];
-        ret.push(id);
-
-        let data = serde_json::to_string(&data)?;
+    /// Encode a frame carrying `data` under message id `id`.
+    pub fn build<T: Serialize>(id: u8, clientid: &str, data: T) -> Result<Vec<u8>> {
+        let mut ret = vec![id];
 
         let base = BasePacket {
-            clientid: clientid.clone(),
-            data,
+            clientid: clientid.to_string(),
+            data: serde_json::to_string(&data)?,
         };
 
-        let data = serde_json::to_string(&base)?;
-        ret.append(&mut data.as_bytes().to_vec());
+        ret.extend_from_slice(serde_json::to_string(&base)?.as_bytes());
 
         Ok(ret)
     }
@@ -113,26 +103,24 @@ impl Message {
         self.peer_addr
     }
 
-    pub fn clientid(&self) -> String {
-        self.clientid.clone()
+    pub fn clientid(&self) -> &str {
+        &self.clientid
     }
 
-    pub fn parser_hostinfo(&self) -> Result<HostInfo> {
-        let packet: HostInfo = serde_json::from_str(&self.data)?;
-        Ok(packet)
-    }
-
-    pub fn parser_heartbeat(&self) -> Result<Heartbeat> {
-        let packet: Heartbeat = serde_json::from_str(&self.data)?;
-        Ok(packet)
-    }
-
-    pub fn parser_sessionpacket(&self) -> Result<SessionPacket> {
-        let packet: SessionPacket = serde_json::from_str(&self.data)?;
-        Ok(packet)
-    }
-
+    /// Total size of the frame this message was decoded from.
     pub fn length(&self) -> usize {
         self.data_length
+    }
+
+    pub fn parse_hostinfo(&self) -> Result<HostInfo> {
+        Ok(serde_json::from_str(&self.data)?)
+    }
+
+    pub fn parse_heartbeat(&self) -> Result<Heartbeat> {
+        Ok(serde_json::from_str(&self.data)?)
+    }
+
+    pub fn parse_sessionpacket(&self) -> Result<SessionPacket> {
+        Ok(serde_json::from_str(&self.data)?)
     }
 }

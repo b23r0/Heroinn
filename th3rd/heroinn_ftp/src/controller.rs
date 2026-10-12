@@ -1,24 +1,22 @@
 use heroinn_util::{
-    cur_timestamp_secs,
+    Error, Result, cur_timestamp_secs,
     ftp::{
-        method::{get_disk_info, get_folder_info, md5_file, remove_file},
         FTPGetHeader, FTPId, FTPPacket, FTPPutHeader, FileInfo,
+        method::{get_disk_info, get_folder_info, md5_file, remove_file},
     },
     packet::TunnelRequest,
-    protocol::{tcp::TcpConnection, Client},
+    protocol::tcp::TcpConnection,
     rpc::RpcMessage,
 };
-use std::{io::*, net::TcpListener, sync::mpsc::Sender};
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::{net::TcpListener, sync::mpsc::Sender};
 
 use crate::{TransferInfo, G_RPCCLIENT, G_TRANSFER};
 
 fn send_ftp_packet(sender: &Sender<FTPPacket>, packet: FTPPacket) -> Result<()> {
     match sender.send(packet) {
         Ok(_) => Ok(()),
-        Err(_) => Err(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "sender ftp packet failed",
-        )),
+        Err(_) => Err(Error::Other("sender ftp packet failed".to_string())),
     }
 }
 
@@ -36,7 +34,7 @@ pub fn get_remote_disk_info(sender: &Sender<FTPPacket>) -> Result<Vec<FileInfo>>
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode != 0 {
-                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+                return Err(Error::Other(p.msg));
             }
 
             for i in &p.data {
@@ -67,15 +65,15 @@ pub fn get_local_disk_info() -> Result<Vec<FileInfo>> {
 
 pub fn get_remote_folder_info(
     sender: &Sender<FTPPacket>,
-    full_path: &String,
+    full_path: &str,
 ) -> Result<Vec<FileInfo>> {
-    let msg = RpcMessage::build_call("get_folder_info", vec![full_path.clone()]);
+    let msg = RpcMessage::build_call("get_folder_info", vec![full_path.to_string()]);
     let mut remote_folder_info = vec![];
     send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode != 0 {
-                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+                return Err(Error::Other(p.msg));
             }
 
             for i in &p.data {
@@ -91,15 +89,15 @@ pub fn get_remote_folder_info(
 
 pub fn get_remote_join_path(
     sender: &Sender<FTPPacket>,
-    cur_path: &String,
-    filename: &String,
+    cur_path: &str,
+    filename: &str,
 ) -> Result<String> {
-    let msg = RpcMessage::build_call("join_path", vec![cur_path.clone(), filename.clone()]);
+    let msg = RpcMessage::build_call("join_path", vec![cur_path.to_string(), filename.to_string()]);
     send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode != 0 {
-                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+                return Err(Error::Other(p.msg));
             }
 
             Ok(p.data[0].clone())
@@ -108,9 +106,9 @@ pub fn get_remote_join_path(
     }
 }
 
-pub fn get_local_folder_info(full_path: &String) -> Result<Vec<FileInfo>> {
+pub fn get_local_folder_info(full_path: &str) -> Result<Vec<FileInfo>> {
     let mut local_folder_info = vec![];
-    match get_folder_info(vec![full_path.clone()]) {
+    match get_folder_info(vec![full_path.to_string()]) {
         Ok(p) => {
             for i in &p {
                 let item = FileInfo::parse(i).unwrap();
@@ -123,18 +121,18 @@ pub fn get_local_folder_info(full_path: &String) -> Result<Vec<FileInfo>> {
     }
 }
 
-pub fn delete_local_file(full_path: &String) -> Result<()> {
-    remove_file(vec![full_path.clone()])?;
+pub fn delete_local_file(full_path: &str) -> Result<()> {
+    remove_file(vec![full_path.to_string()])?;
     Ok(())
 }
 
-pub fn delete_remote_file(sender: &Sender<FTPPacket>, full_path: &String) -> Result<()> {
-    let msg = RpcMessage::build_call("remove_file", vec![full_path.clone()]);
+pub fn delete_remote_file(sender: &Sender<FTPPacket>, full_path: &str) -> Result<()> {
+    let msg = RpcMessage::build_call("remove_file", vec![full_path.to_string()]);
     send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
             if p.retcode != 0 {
-                return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+                return Err(Error::Other(p.msg));
             }
 
             Ok(())
@@ -145,8 +143,8 @@ pub fn delete_remote_file(sender: &Sender<FTPPacket>, full_path: &String) -> Res
 
 pub fn download_file(
     sender: &Sender<FTPPacket>,
-    local_path: &String,
-    remote_path: &String,
+    local_path: &str,
+    remote_path: &str,
 ) -> Result<()> {
     let local_md5 = match md5_file(vec![local_path.to_string()]) {
         Ok(p) => p[0].clone(),
@@ -154,7 +152,7 @@ pub fn download_file(
     };
 
     let mut header = FTPGetHeader {
-        path: remote_path.clone(),
+        path: remote_path.to_string(),
         start_pos: 0,
     };
 
@@ -163,13 +161,13 @@ pub fn download_file(
 
         let msg = RpcMessage::build_call(
             "md5_file",
-            vec![remote_path.clone(), f.metadata()?.len().to_string()],
+            vec![remote_path.to_string(), f.metadata()?.len().to_string()],
         );
         send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
         let (remote_md5, file_size) = match G_RPCCLIENT.wait_msg(&msg.id, 10) {
             Ok(p) => {
                 if p.retcode != 0 {
-                    return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+                    return Err(Error::Other(p.msg));
                 }
 
                 (p.data[0].clone(), p.data[1].parse::<u64>().unwrap())
@@ -187,7 +185,7 @@ pub fn download_file(
                 Ok(_) => {}
                 Err(e) => {
                     log::error!("seek local file failed : {}", e);
-                    return Err(e);
+                    return Err(Error::Io(e));
                 }
             };
         }
@@ -196,12 +194,12 @@ pub fn download_file(
     } else {
         let f = std::fs::File::create(local_path)?;
 
-        let msg = RpcMessage::build_call("file_size", vec![remote_path.clone()]);
+        let msg = RpcMessage::build_call("file_size", vec![remote_path.to_string()]);
         send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
         let file_size = match G_RPCCLIENT.wait_msg(&msg.id, 10) {
             Ok(p) => {
                 if p.retcode != 0 {
-                    return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, p.msg));
+                    return Err(Error::Other(p.msg));
                 }
 
                 p.data[0].parse::<u64>().unwrap()
@@ -215,8 +213,8 @@ pub fn download_file(
     };
 
     let sender = sender.clone();
-    let local_path = local_path.clone();
-    let remote_path = remote_path.clone();
+    let local_path = local_path.to_string();
+    let remote_path = remote_path.to_string();
     std::thread::Builder::new()
         .name("download file worker".to_string())
         .spawn(move || {
@@ -245,7 +243,7 @@ pub fn download_file(
                 }
             };
 
-            match s.send(&mut header.serialize().unwrap()) {
+            match s.send(&header.serialize().unwrap()) {
                 Ok(_) => {}
                 Err(e) => {
                     log::error!("send get header failed : {}", e);
@@ -345,32 +343,29 @@ pub fn download_file(
 
 pub fn upload_file(
     sender: &Sender<FTPPacket>,
-    local_path: &String,
-    remote_path: &String,
+    local_path: &str,
+    remote_path: &str,
 ) -> Result<()> {
     let mut header = FTPPutHeader {
-        path: remote_path.clone(),
+        path: remote_path.to_string(),
         total_size: 0,
         start_pos: 0,
     };
 
-    let msg = RpcMessage::build_call("md5_file", vec![remote_path.clone()]);
+    let msg = RpcMessage::build_call("md5_file", vec![remote_path.to_string()]);
     send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
-    match G_RPCCLIENT.wait_msg(&msg.id, 10) {
-        Ok(p) => {
-            if p.retcode == 0 {
-                let (remote_file_md5, remote_file_size) =
-                    (p.data[0].clone(), p.data[1].parse::<u64>().unwrap());
+    if let Ok(p) = G_RPCCLIENT.wait_msg(&msg.id, 10) {
+        if p.retcode == 0 {
+            let (remote_file_md5, remote_file_size) =
+                (p.data[0].clone(), p.data[1].parse::<u64>().unwrap());
 
-                let local_md5 = md5_file(vec![local_path.clone()])?[0].clone();
+            let local_md5 = md5_file(vec![local_path.to_string()])?[0].clone();
 
-                if remote_file_md5 == local_md5 {
-                    log::info!("resume broken transfer");
-                    header.start_pos = remote_file_size;
-                }
+            if remote_file_md5 == local_md5 {
+                log::info!("resume broken transfer");
+                header.start_pos = remote_file_size;
             }
         }
-        Err(_) => {}
     };
 
     let mut f = std::fs::File::options().read(true).open(local_path)?;
@@ -378,8 +373,8 @@ pub fn upload_file(
     header.total_size = f.metadata()?.len();
 
     let sender = sender.clone();
-    let local_path = local_path.clone();
-    let remote_path = remote_path.clone();
+    let local_path = local_path.to_string();
+    let remote_path = remote_path.to_string();
     std::thread::Builder::new()
         .name("upload file worker".to_string())
         .spawn(move || {
@@ -408,8 +403,8 @@ pub fn upload_file(
                 }
             };
 
-            match s.send(&mut header.serialize().unwrap()) {
-                Ok(p) => p,
+            match s.send(&header.serialize().unwrap()) {
+                Ok(_) => {}
                 Err(e) => {
                     log::error!("send get header failed : {}", e);
                     return;
@@ -463,7 +458,7 @@ pub fn upload_file(
                 }
 
                 log::debug!("send file data [{}]", size);
-                match s.send(&mut buf[..size]) {
+                match s.send(&buf[..size]) {
                     Ok(_) => {}
                     Err(e) => {
                         log::error!("get worker send to server failed : {}", e);

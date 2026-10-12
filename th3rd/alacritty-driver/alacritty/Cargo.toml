@@ -1,0 +1,73 @@
+[package]
+name = "heroinn_shell"
+version = "0.1.0"
+authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.com>"]
+license = "Apache-2.0"
+description = "Heroinn's server-side terminal window, driving the remote pty over a local socket"
+readme = "../README.md"
+homepage = "https://github.com/b23r0/alacritty-driver"
+edition = "2021"
+rust-version = "1.57.0"
+
+[[bin]]
+name = "heroinn_shell"
+path = "src/main.rs"
+
+[dependencies.alacritty_terminal]
+path = "../alacritty_terminal"
+version = "0.17.0-dev"
+default-features = false
+
+[dependencies.alacritty_config_derive]
+path = "../alacritty_config_derive"
+version = "0.1.0"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+log = { version = "0.4", features = ["std", "serde"] }
+fnv = "1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+glutin = { version = "0.28.0", default-features = false, features = ["serde"] }
+notify = "8"
+parking_lot = "0.12"
+crossfont = "0.9"
+copypasta = { version = "0.10.2", default-features = false }
+libc = "0.2"
+unicode-width = "0.2"
+bitflags = "2"
+dirs = "6"
+
+[build-dependencies]
+gl_generator = "0.14.0"
+
+[dev-dependencies]
+clap_complete = "4"
+
+[target.'cfg(not(windows))'.dependencies]
+xdg = "2.4.0"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+png = { version = "0.18", default-features = false, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+raw-window-handle = "0.4.0"
+cocoa = "0.24.0"
+objc = "0.2.2"
+
+[target.'cfg(not(any(target_os="windows", target_os="macos")))'.dependencies]
+x11-dl = { version = "2", optional = true }
+wayland-client = { version = "0.29.0", features = ["dlopen"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.7", features = ["impl-default", "wincon"]}
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "1.3"
+
+[features]
+default = ["wayland", "x11"]
+x11 = ["copypasta/x11", "glutin/x11", "x11-dl", "png"]
+wayland = ["copypasta/wayland", "glutin/wayland", "glutin/wayland-dlopen", "wayland-client"]
+nightly = []

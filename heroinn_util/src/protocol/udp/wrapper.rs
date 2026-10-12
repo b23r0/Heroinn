@@ -1,97 +1,69 @@
-use lazy_static::*;
-use rust_raknet::*;
-use std::io::*;
-use std::{net::SocketAddr, sync::Arc};
+//! Thin blocking facade over the async `rust-raknet` API.
+//!
+//! A single shared Tokio runtime drives every RakNet socket so callers can keep
+//! the rest of the transport layer synchronous.
 
-lazy_static! {
-    static ref RT: tokio::runtime::Runtime = tokio::runtime::Builder::new_multi_thread()
+use std::net::SocketAddr;
+use std::sync::{Arc, LazyLock};
+
+use rust_raknet::*;
+
+use crate::error::{Error, Result};
+
+/// Shared multi-threaded Tokio runtime driving the reliable-UDP (RakNet) transport.
+static RT: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .unwrap();
-}
+        .unwrap()
+});
 
+/// Accepting side of a RakNet socket.
 pub struct RUdpServer {
     server: RaknetListener,
 }
 
+/// Connected side of a RakNet socket.
 pub struct RUdpClient {
     client: Arc<RaknetSocket>,
 }
 
 impl RUdpClient {
-    pub fn new(address: String) -> Result<RUdpClient> {
-        let address: SocketAddr = match address.parse() {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{:?}", e),
-                ));
-            }
-        };
-        let client = match match RT.block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                RaknetSocket::connect(&address),
-            )
-            .await
-        }) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{:?}", e),
-                ));
-            }
-        } {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{:?}", e),
-                ));
-            }
-        };
+    /// Connect to `address`, giving up after three seconds.
+    pub fn new(address: String) -> Result<Self> {
+        let address: SocketAddr = address
+            .parse()
+            .map_err(|e| Error::Other(format!("address format error : {:?}", e)))?;
 
-        Ok(RUdpClient {
+        let client = RT
+            .block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    RaknetSocket::connect(&address),
+                )
+                .await
+            })
+            .map_err(|e| Error::Other(format!("{:?}", e)))?
+            .map_err(|e| Error::Other(format!("{:?}", e)))?;
+
+        Ok(Self {
             client: Arc::new(client),
         })
     }
 
     pub fn send(&self, buf: Vec<u8>) -> Result<()> {
-        match RT.block_on(self.client.send(&buf, Reliability::ReliableOrdered)) {
-            Ok(_) => {}
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{:?}", e),
-                ));
-            }
-        };
-        match RT.block_on(self.client.flush()) {
-            Ok(_) => {}
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionReset,
-                    format!("{:?}", e),
-                ));
-            }
-        };
+        RT.block_on(self.client.send(&buf, Reliability::ReliableOrdered))
+            .map_err(|e| Error::Other(format!("{:?}", e)))?;
+
+        RT.block_on(self.client.flush())
+            .map_err(|e| Error::Other(format!("{:?}", e)))?;
+
         Ok(())
     }
 
     pub fn recv(&self) -> Result<Vec<u8>> {
-        let buf = match RT.block_on(self.client.recv()) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{:?}", e),
-                ));
-            }
-        };
-
-        Ok(buf)
+        RT.block_on(self.client.recv())
+            .map_err(|e| Error::Other(format!("{:?}", e)))
     }
 
     pub fn peer_addr(&self) -> Result<SocketAddr> {
@@ -103,8 +75,8 @@ impl RUdpClient {
     }
 
     pub fn close(&self) -> Result<()> {
-        RT.block_on(self.client.close()).unwrap();
-        Ok(())
+        RT.block_on(self.client.close())
+            .map_err(|e| Error::Other(format!("{:?}", e)))
     }
 }
 
@@ -117,55 +89,34 @@ impl Clone for RUdpClient {
 }
 
 impl RUdpServer {
-    pub fn new(address: &String) -> Result<RUdpServer> {
-        let address: SocketAddr = match address.parse() {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{:?}", e),
-                ));
-            }
-        };
-        let mut server = match RT.block_on(RaknetListener::bind(&address)) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{:?}", e),
-                ))
-            }
-        };
+    /// Bind a RakNet listener to `address` and start listening.
+    pub fn new(address: &str) -> Result<Self> {
+        let address: SocketAddr = address
+            .parse()
+            .map_err(|e| Error::Other(format!("address format error : {:?}", e)))?;
+
+        let mut server = RT
+            .block_on(RaknetListener::bind(&address))
+            .map_err(|e| Error::Other(format!("{:?}", e)))?;
 
         RT.block_on(server.listen());
 
-        Ok(RUdpServer { server })
+        Ok(Self { server })
     }
 
+    /// Accept one peer, giving up after `timeout_mills`.
     pub fn accept(&mut self, timeout_mills: u64) -> Result<RUdpClient> {
-        let client = match match RT.block_on(async {
-            tokio::time::timeout(
-                std::time::Duration::from_millis(timeout_mills),
-                self.server.accept(),
-            )
-            .await
-        }) {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("{:?}", e),
-                ));
-            }
-        } {
-            Ok(p) => p,
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("{:?}", e),
-                ));
-            }
-        };
+        let client = RT
+            .block_on(async {
+                tokio::time::timeout(
+                    std::time::Duration::from_millis(timeout_mills),
+                    self.server.accept(),
+                )
+                .await
+            })
+            .map_err(|_| Error::Timeout)?
+            .map_err(|e| Error::Other(format!("{:?}", e)))?;
+
         Ok(RUdpClient {
             client: Arc::new(client),
         })
@@ -176,11 +127,11 @@ impl RUdpServer {
     }
 
     pub fn close(&mut self) -> Result<()> {
-        RT.block_on(self.server.close()).unwrap();
-        Ok(())
+        RT.block_on(self.server.close())
+            .map_err(|e| Error::Other(format!("{:?}", e)))
     }
 
-    pub fn setmotd(&mut self, motd: String) {
-        self.server.set_full_motd(motd).unwrap();
+    pub fn set_motd(&mut self, motd: String) {
+        RT.block_on(self.server.set_full_motd(motd)).unwrap();
     }
 }

@@ -1,0 +1,31 @@
+[package]
+name = "alacritty_terminal"
+version = "0.17.0-dev"
+authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.com>"]
+license = "Apache-2.0"
+description = "Library for writing terminal emulators"
+readme = "../README.md"
+homepage = "https://github.com/alacritty/alacritty"
+edition = "2021"
+rust-version = "1.57.0"
+
+[dependencies.alacritty_config_derive]
+path = "../alacritty_config_derive"
+version = "0.1.0"
+
+[dependencies]
+libc = "0.2"
+bitflags = { version = "2", features = ["serde"] }
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_yaml = "0.9"
+vte = { version = "0.15", default-features = false }
+mio = { version = "1", features = ["os-poll", "net"] }
+log = "0.4"
+unicode-width = "0.2"
+base64 = "0.22"
+regex-automata = "0.4"
+dirs = "6"
+
+[dev-dependencies]
+serde_json = "1.0.0"

@@ -22,9 +22,7 @@ pub fn master_configure() -> ConnectionInfo {
         std::process::exit(0);
     }
 
-    
-
-    match ConnectionInfo::parse(&G_DNA.data[..size as usize].to_vec()) {
+    match ConnectionInfo::parse(&G_DNA.data[..size as usize]) {
         Ok(p) => p,
         Err(_) => {
             log::error!("parse master connection info failed");

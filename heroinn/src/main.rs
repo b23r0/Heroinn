@@ -1,18 +1,27 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use controller::*;
 use eframe::egui::{self};
-use egui_extras::{Size, StripBuilder, TableBuilder};
-use heroinn_util::{ftp::method::transfer_speed, gen::replace_connection_info_to_new_file, *};
+use egui_extras::{Column, Size, StripBuilder, TableBuilder};
+use heroinn_util::{dna::replace_connection_info_to_new_file, ftp::method::transfer_speed, *};
 
 mod controller;
 mod msgbox;
 
-#[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SwitchDock {
     Hosts,
     Listener,
     Generator,
+}
+
+/// Decode an embedded `.ico` resource into GPU-resident egui texture.
+fn load_icon(ctx: &egui::Context, name: &str, bytes: &[u8]) -> egui::TextureHandle {
+    let img = image::load_from_memory(bytes)
+        .expect("failed to decode embedded icon")
+        .to_rgba8();
+    let size = [img.width() as usize, img.height() as usize];
+    let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
+    ctx.load_texture(name, color, egui::TextureOptions::LINEAR)
 }
 
 #[derive(PartialEq)]
@@ -58,13 +67,16 @@ fn main() {
             .unwrap();
         ::log::set_max_level(log::LevelFilter::Debug);
     }
-    let mut options = eframe::NativeOptions::default();
-    options.initial_window_size = Some(egui::Vec2::new(1375.0, 610.0));
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default().with_inner_size([1375.0, 610.0]),
+        ..Default::default()
+    };
     eframe::run_native(
         "Heroinn",
         options,
-        Box::new(|_cc| Box::new(HeroinnApp::default())),
-    );
+        Box::new(|_cc| Ok(Box::new(HeroinnApp::default()))),
+    )
+    .unwrap();
 }
 struct HeroinnApp {
     initilized: bool,
@@ -77,8 +89,8 @@ struct HeroinnApp {
     text_generator_remark: String,
     combox_generator_protocol: HeroinnProtocol,
     combox_generator_platform: HeroinnPlatform,
-    host_image: egui_extras::RetainedImage,
-    listener_image: egui_extras::RetainedImage,
+    host_image: Option<egui::TextureHandle>,
+    listener_image: Option<egui::TextureHandle>,
 }
 
 impl Default for HeroinnApp {
@@ -94,45 +106,57 @@ impl Default for HeroinnApp {
             text_generator_remark: String::new(),
             combox_generator_protocol: HeroinnProtocol::TCP,
             combox_generator_platform: HeroinnPlatform::WindowsX64,
-            host_image: egui_extras::RetainedImage::from_image_bytes(
-                "host.ico",
-                include_bytes!("res/host.ico"),
-            )
-            .unwrap(),
-            listener_image: egui_extras::RetainedImage::from_image_bytes(
-                "host.ico",
-                include_bytes!("res/listen.ico"),
-            )
-            .unwrap(),
+            host_image: None,
+            listener_image: None,
         }
     }
 }
 
 impl eframe::App for HeroinnApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if !self.initilized {
-                ui.ctx().set_visuals(egui::Visuals::dark());
-                self.initilized = true;
-            }
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
 
-            self.ui(ctx, ui);
+        if !self.initilized {
+            ctx.set_theme(egui::Theme::Dark);
+            self.initilized = true;
+        }
+
+        if self.host_image.is_none() {
+            self.host_image = Some(load_icon(&ctx, "host.ico", include_bytes!("res/host.ico")));
+        }
+        if self.listener_image.is_none() {
+            self.listener_image = Some(load_icon(
+                &ctx,
+                "listen.ico",
+                include_bytes!("res/listen.ico"),
+            ));
+        }
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            self.ui(ui);
             ctx.request_repaint();
         });
     }
 }
 impl HeroinnApp {
-    fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.switch, SwitchDock::Hosts, "Hosts");
             ui.selectable_value(&mut self.switch, SwitchDock::Listener, "Listener");
             ui.selectable_value(&mut self.switch, SwitchDock::Generator, "Generator");
 
-            let visuals = ui.ctx().style().visuals.clone();
-            match visuals.light_dark_small_toggle_button(ui) {
-                Some(v) => ui.ctx().set_visuals(v),
-                None => {}
-            };
+            let dark = matches!(ui.ctx().theme(), egui::Theme::Dark);
+            if ui
+                .button(if dark { "Light" } else { "Dark" })
+                .on_hover_text("Toggle light/dark theme")
+                .clicked()
+            {
+                ui.ctx().set_theme(if dark {
+                    egui::Theme::Light
+                } else {
+                    egui::Theme::Dark
+                });
+            }
         });
 
         ui.separator();
@@ -145,7 +169,7 @@ impl HeroinnApp {
                     .vertical(|mut strip| {
                         strip.cell(|ui| {
                             ui.vertical_centered(|ui| {
-                                self.host_table(ctx, ui);
+                                self.host_table(ui);
                             });
                         });
                         strip.cell(|ui| {
@@ -238,7 +262,7 @@ impl HeroinnApp {
                             ui.separator();
                         });
                         strip.cell(|ui| {
-                            self.listen_table(ctx, ui);
+                            self.listen_table(ui);
                         });
                         strip.cell(|ui| {
                             ui.vertical_centered(|ui| {
@@ -275,7 +299,7 @@ impl HeroinnApp {
                                     ui.end_row();
 
                                     ui.add(doc_link_label("Protocol", "label,heading"));
-                                    egui::ComboBox::from_id_source(1)
+                                    egui::ComboBox::from_id_salt(1)
                                         .selected_text(format!(
                                             "{:?}",
                                             self.combox_generator_protocol
@@ -301,7 +325,7 @@ impl HeroinnApp {
                                     ui.end_row();
 
                                     ui.add(doc_link_label("Platform", "label,heading"));
-                                    egui::ComboBox::from_id_source(2)
+                                    egui::ComboBox::from_id_salt(2)
                                         .width(280.0)
                                         .selected_text(format!(
                                             "{:?}",
@@ -426,15 +450,15 @@ impl HeroinnApp {
         }
     }
 
-    fn listen_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn listen_table(&mut self, ui: &mut egui::Ui) {
         TableBuilder::new(ui)
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Size::initial(320.0).at_least(50.0))
-            .column(Size::initial(320.0).at_least(50.0))
-            .column(Size::initial(100.0).at_least(50.0))
-            .column(Size::initial(488.0).at_least(50.0))
-            .column(Size::initial(100.0).at_least(50.0))
+            .column(Column::initial(320.0).at_least(50.0))
+            .column(Column::initial(320.0).at_least(50.0))
+            .column(Column::initial(100.0).at_least(50.0))
+            .column(Column::initial(488.0).at_least(50.0))
+            .column(Column::initial(100.0).at_least(50.0))
             .resizable(self.resizable)
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -458,10 +482,12 @@ impl HeroinnApp {
                     let row_height = 30.0;
                     body.row(row_height, |mut row| {
                         row.col(|ui| {
-                            ui.add(egui::Image::new(
-                                self.listener_image.texture_id(ctx),
-                                egui::Vec2::new(30.0, 30.0),
-                            ));
+                            if let Some(tex) = &self.listener_image {
+                                ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
+                                    tex.id(),
+                                    egui::Vec2::new(30.0, 30.0),
+                                )));
+                            }
                         });
 
                         row.col(|ui| {
@@ -490,20 +516,24 @@ impl HeroinnApp {
             });
     }
 
-    fn host_table(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
+    fn host_table(&mut self, ui: &mut egui::Ui) {
         TableBuilder::new(ui)
             .striped(true)
+            // egui >= 0.20 no longer upgrades a hover-only response to a clickable
+            // one inside `context_menu`, so the cells must sense clicks themselves
+            // for the per-row context menu to open.
+            .sense(egui::Sense::click())
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Size::initial(50.0).at_least(50.0))
-            .column(Size::initial(160.0).at_least(50.0))
-            .column(Size::initial(110.0).at_least(50.0))
-            .column(Size::initial(150.0).at_least(50.0))
-            .column(Size::initial(210.0).at_least(50.0))
-            .column(Size::initial(100.0).at_least(50.0))
-            .column(Size::initial(100.0).at_least(50.0))
-            .column(Size::initial(100.0).at_least(50.0))
-            .column(Size::initial(150.0).at_least(50.0))
-            .column(Size::initial(150.0).at_least(50.0))
+            .column(Column::initial(50.0).at_least(50.0))
+            .column(Column::initial(160.0).at_least(50.0))
+            .column(Column::initial(110.0).at_least(50.0))
+            .column(Column::initial(150.0).at_least(50.0))
+            .column(Column::initial(210.0).at_least(50.0))
+            .column(Column::initial(100.0).at_least(50.0))
+            .column(Column::initial(100.0).at_least(50.0))
+            .column(Column::initial(100.0).at_least(50.0))
+            .column(Column::initial(150.0).at_least(50.0))
+            .column(Column::initial(150.0).at_least(50.0))
             .resizable(self.resizable)
             .header(20.0, |mut header| {
                 header.col(|ui| {
@@ -549,7 +579,7 @@ impl HeroinnApp {
                                     msgbox::error(&"Shell".to_string(), &format!("{}", e));
                                 }
                             };
-                            ui.close_menu();
+                            ui.close();
                         }
                         if ui.button("File").clicked() {
                             match open_ftp(&clientid) {
@@ -558,55 +588,57 @@ impl HeroinnApp {
                                     msgbox::error(&"Shell".to_string(), &format!("{}", e));
                                 }
                             };
-                            ui.close_menu();
+                            ui.close();
                         }
                     };
 
                     let row_height = 30.0;
                     body.row(row_height, |mut row| {
                         row.col(|ui| {
-                            ui.add(egui::Image::new(
-                                self.host_image.texture_id(ctx),
-                                egui::Vec2::new(30.0, 30.0),
-                            ));
+                            if let Some(tex) = &self.host_image {
+                                ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
+                                    tex.id(),
+                                    egui::Vec2::new(30.0, 30.0),
+                                )));
+                            }
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
 
                         row.col(|ui| {
                             ui.label(format!("{}", info.peer_addr));
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
 
                         row.col(|ui| {
                             ui.label(info.info.whoami);
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
                         row.col(|ui| {
                             ui.label(info.info.host_name);
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
                         row.col(|ui| {
                             ui.label(info.info.os);
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
                         row.col(|ui| {
                             ui.label(format!("{:?}", info.proto));
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
 
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
                             let in_rate = info.in_rate / (secs + HEART_BEAT_TIME);
                             ui.label(transfer_speed(in_rate as f64));
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
 
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
                             let out_rate = info.out_rate / (secs + HEART_BEAT_TIME);
                             ui.label(transfer_speed(out_rate as f64));
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
 
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
@@ -615,11 +647,11 @@ impl HeroinnApp {
                             }
                             ui.label(format!("{} s", secs));
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
                         row.col(|ui| {
                             ui.label(info.info.remark);
                         })
-                        .context_menu(menu);
+                        .1.context_menu(menu);
                     });
                 }
             });

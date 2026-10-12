@@ -1,10 +1,18 @@
-use super::FileInfo;
+//! File-system operations exposed to remote clients over RPC.
+
+use std::io::Read;
+use std::path::Path;
+
 use chrono::offset::Utc;
 use chrono::DateTime;
+use md5::{Digest, Md5};
 use path_absolutize::*;
-use std::{io::*, path::Path};
-use sysinfo::{DiskExt, SystemExt};
+use sysinfo::Disks;
 
+use super::FileInfo;
+use crate::error::Result;
+
+/// Render a byte count as a human-readable size.
 pub fn transfer_size(size: f64) -> String {
     if size < 1024.0 {
         format!("{:.2} Byte", size)
@@ -17,6 +25,7 @@ pub fn transfer_size(size: f64) -> String {
     }
 }
 
+/// Render a bytes-per-second figure as a human-readable speed.
 pub fn transfer_speed(size: f64) -> String {
     if size < 1024.0 {
         format!("{:.2} Byte/s", size)
@@ -29,23 +38,22 @@ pub fn transfer_speed(size: f64) -> String {
     }
 }
 
+/// List the mounted drives as serialized [`FileInfo`]s.
 pub fn get_disk_info(_: Vec<String>) -> Result<Vec<String>> {
     let mut ret = vec![];
 
-    let sys = sysinfo::System::new_all();
-    for d in sys.disks() {
+    let disks = Disks::new_with_refreshed_list();
+    for d in disks.list() {
         let name = d.mount_point().to_str().unwrap().to_string();
-        let mut typ = format!("{:?}", d.type_());
+        let mut typ = format!("{:?}", d.kind());
 
         if typ.contains("Unknown") {
             typ = "Unknown Drive".to_string();
         }
 
-        let size = d.total_space();
-
         let info = FileInfo {
             name,
-            size,
+            size: d.total_space(),
             typ,
             last_modified: String::new(),
         };
@@ -55,6 +63,7 @@ pub fn get_disk_info(_: Vec<String>) -> Result<Vec<String>> {
     Ok(ret)
 }
 
+/// List the entries of the directory named by `param[0]`.
 pub fn get_folder_info(param: Vec<String>) -> Result<Vec<String>> {
     let mut ret = vec![];
 
@@ -64,8 +73,7 @@ pub fn get_folder_info(param: Vec<String>) -> Result<Vec<String>> {
     for d in dirs {
         let d = d?;
         let t = d.file_type()?;
-        let mt = d.metadata()?.modified()?;
-        let mt: DateTime<Utc> = mt.into();
+        let mt: DateTime<Utc> = d.metadata()?.modified()?.into();
 
         let info = FileInfo {
             name: d.file_name().to_str().unwrap().to_string(),
@@ -88,9 +96,7 @@ pub fn get_folder_info(param: Vec<String>) -> Result<Vec<String>> {
     ret.sort_by(|a, b| {
         let a = FileInfo::parse(a).unwrap();
         let b = FileInfo::parse(b).unwrap();
-        if a.typ == "FOLDER" && b.typ == "FOLDER" {
-            std::cmp::Ordering::Less
-        } else if a.typ == "FOLDER" {
+        if a.typ == "FOLDER" {
             std::cmp::Ordering::Less
         } else if b.typ == "FOLDER" {
             std::cmp::Ordering::Greater
@@ -101,6 +107,7 @@ pub fn get_folder_info(param: Vec<String>) -> Result<Vec<String>> {
     Ok(ret)
 }
 
+/// Join `param[1]` onto `param[0]` and absolutize the result.
 pub fn join_path(param: Vec<String>) -> Result<Vec<String>> {
     Ok(vec![Path::new(&param[0])
         .join(&param[1])
@@ -111,12 +118,13 @@ pub fn join_path(param: Vec<String>) -> Result<Vec<String>> {
         .to_string()])
 }
 
+/// Delete the file named by `param[0]`.
 pub fn remove_file(param: Vec<String>) -> Result<Vec<String>> {
-    let filename = param[0].clone();
-    std::fs::remove_file(filename)?;
+    std::fs::remove_file(param[0].clone())?;
     Ok(vec![])
 }
 
+/// Hash the first `param[1]` bytes (or the whole file) and return hex + size.
 pub fn md5_file(param: Vec<String>) -> Result<Vec<String>> {
     let path = param[0].clone();
 
@@ -128,10 +136,7 @@ pub fn md5_file(param: Vec<String>) -> Result<Vec<String>> {
         f.metadata()?.len()
     };
 
-    let mut md5_str = String::new();
-
-    let mut md5 = md5::Md5::default();
-
+    let mut md5 = Md5::new();
     let mut buffer = vec![0u8; 1024 * 1024 * 20].into_boxed_slice();
 
     let mut sum: u64 = 0;
@@ -140,28 +145,29 @@ pub fn md5_file(param: Vec<String>) -> Result<Vec<String>> {
             let mut last_buf = vec![0u8; (end_pos - sum) as usize].into_boxed_slice();
             f.read_exact(&mut last_buf)?;
 
-            md5::Digest::update(&mut md5, &last_buf);
-
+            md5.update(&last_buf);
             break;
         }
 
         let n = f.read(&mut buffer)?;
         sum += n as u64;
-        md5::Digest::update(&mut md5, &buffer[..n]);
+        md5.update(&buffer[..n]);
 
         if n == 0 {
             break;
         }
     }
 
-    for b in md5::Digest::finalize(md5) {
-        let a = format!("{:02x}", b);
-        md5_str += &a;
-    }
+    let md5_str = md5
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
 
     Ok(vec![md5_str, f.metadata()?.len().to_string()])
 }
 
+/// Report the size of the file named by `param[0]`.
 pub fn file_size(param: Vec<String>) -> Result<Vec<String>> {
     Ok(vec![std::fs::File::open(&param[0])?
         .metadata()?
