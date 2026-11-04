@@ -2,7 +2,13 @@
 use controller::*;
 use eframe::egui::{self};
 use egui_extras::{Column, Size, StripBuilder, TableBuilder};
-use heroinn_util::{dna::replace_connection_info_to_new_file, ftp::method::transfer_speed, *};
+use heroinn_util::{
+    ConnectionInfo,
+    dna::{find_client_template, replace_connection_info_to_new_file},
+    ftp::method::transfer_speed,
+    *,
+};
+use std::path::PathBuf;
 
 mod controller;
 mod msgbox;
@@ -12,6 +18,13 @@ enum SwitchDock {
     Hosts,
     Listener,
     Generator,
+}
+
+struct TransferRateDialog {
+    clientid: String,
+    value: String,
+    unit: TransferRateUnit,
+    error: Option<String>,
 }
 
 /// Decode an embedded `.ico` resource into GPU-resident egui texture.
@@ -41,6 +54,45 @@ impl std::fmt::Debug for HeroinnPlatform {
             Self::DARWINX64 => write!(f, "OSX_x86_64"),
         }
     }
+}
+
+impl HeroinnPlatform {
+    fn template_file_names(&self) -> &'static [&'static str] {
+        match self {
+            Self::LinuxX64 => &["heroinn_client_linux", "heroinn_client"],
+            Self::WindowsX64 => &["heroinn_client_windows.exe", "heroinn_client.exe"],
+            Self::BSDX64 => &["heroinn_client_bsd", "heroinn_client"],
+            Self::DARWINX64 => &["heroinn_client_darwin", "heroinn_client"],
+        }
+    }
+
+    fn default_output_name(&self) -> &'static str {
+        match self {
+            Self::LinuxX64 => "heroinn_client_linux",
+            Self::WindowsX64 => "heroinn_client.exe",
+            Self::BSDX64 => "heroinn_client_bsd",
+            Self::DARWINX64 => "heroinn_client_darwin",
+        }
+    }
+}
+
+fn client_template_search_dirs() -> Vec<PathBuf> {
+    let mut directories = Vec::new();
+
+    if let Some(directory) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))
+    {
+        directories.push(directory);
+    }
+
+    if let Ok(directory) = std::env::current_dir() {
+        if !directories.contains(&directory) {
+            directories.push(directory);
+        }
+    }
+
+    directories
 }
 
 fn doc_link_label<'a>(title: &'a str, search_term: &'a str) -> impl egui::Widget + 'a {
@@ -91,6 +143,7 @@ struct HeroinnApp {
     combox_generator_platform: HeroinnPlatform,
     host_image: Option<egui::TextureHandle>,
     listener_image: Option<egui::TextureHandle>,
+    transfer_rate_dialog: Option<TransferRateDialog>,
 }
 
 impl Default for HeroinnApp {
@@ -108,6 +161,7 @@ impl Default for HeroinnApp {
             combox_generator_platform: HeroinnPlatform::WindowsX64,
             host_image: None,
             listener_image: None,
+            transfer_rate_dialog: None,
         }
     }
 }
@@ -371,56 +425,55 @@ impl HeroinnApp {
                                     strip.cell(|_ui| {});
                                     strip.cell(|ui| {
                                         if ui.button("Generate").clicked() {
-                                            let path = std::env::current_dir().unwrap();
-
-                                            let res = match rfd::FileDialog::new()
-                                                .set_directory(&path)
-                                                .save_file()
-                                            {
-                                                Some(p) => p,
-                                                None => return,
+                                            let connection_info = match ConnectionInfo::new(
+                                                self.combox_generator_protocol.clone(),
+                                                &self.text_generator_address,
+                                                &self.text_generator_port,
+                                                &self.text_generator_remark,
+                                            ) {
+                                                Ok(info) => info,
+                                                Err(e) => {
+                                                    msgbox::error(
+                                                        &"Generator".to_string(),
+                                                        &format!("{}", e),
+                                                    );
+                                                    return;
+                                                }
                                             };
 
-                                            let new_path = res.to_str().unwrap().to_string();
+                                            let slave_file_path = match find_client_template(
+                                                self.combox_generator_platform
+                                                    .template_file_names(),
+                                                &client_template_search_dirs(),
+                                            ) {
+                                                Ok(path) => path,
+                                                Err(e) => {
+                                                    msgbox::error(
+                                                        &"Generator".to_string(),
+                                                        &format!("{}", e),
+                                                    );
+                                                    return;
+                                                }
+                                            };
 
-                                            let slave_file_path =
-                                                match self.combox_generator_platform {
-                                                    HeroinnPlatform::LinuxX64 => path
-                                                        .join("heroinn_client_linux")
-                                                        .to_str()
-                                                        .unwrap()
-                                                        .to_string(),
-                                                    HeroinnPlatform::WindowsX64 => path
-                                                        .join("heroinn_client.exe")
-                                                        .to_str()
-                                                        .unwrap()
-                                                        .to_string(),
-                                                    HeroinnPlatform::BSDX64 => path
-                                                        .join("heroinn_client_bsd")
-                                                        .to_str()
-                                                        .unwrap()
-                                                        .to_string(),
-                                                    HeroinnPlatform::DARWINX64 => path
-                                                        .join("heroinn_client_darwin")
-                                                        .to_str()
-                                                        .unwrap()
-                                                        .to_string(),
-                                                };
+                                            let dialog = rfd::FileDialog::new()
+                                                .set_directory(
+                                                    std::env::current_dir()
+                                                        .unwrap_or_else(|_| PathBuf::from(".")),
+                                                )
+                                                .set_file_name(
+                                                    self.combox_generator_platform
+                                                        .default_output_name(),
+                                                );
+                                            let new_path = match dialog.save_file() {
+                                                Some(path) => path,
+                                                None => return,
+                                            };
 
                                             match replace_connection_info_to_new_file(
                                                 &slave_file_path,
                                                 &new_path,
-                                                ConnectionInfo {
-                                                    protocol: self
-                                                        .combox_generator_protocol
-                                                        .to_u8(),
-                                                    address: format!(
-                                                        "{}:{}",
-                                                        self.text_generator_address,
-                                                        self.text_generator_port
-                                                    ),
-                                                    remark: self.text_generator_remark.clone(),
-                                                },
+                                                connection_info,
                                             ) {
                                                 Ok(_) => {
                                                     msgbox::info(
@@ -448,6 +501,9 @@ impl HeroinnApp {
                     });
             }
         }
+
+        let ctx = ui.ctx().clone();
+        self.show_transfer_rate_dialog(&ctx);
     }
 
     fn listen_table(&mut self, ui: &mut egui::Ui) {
@@ -517,6 +573,8 @@ impl HeroinnApp {
     }
 
     fn host_table(&mut self, ui: &mut egui::Ui) {
+        let rate_dialog_request = std::cell::RefCell::new(None::<String>);
+
         TableBuilder::new(ui)
             .striped(true)
             // egui >= 0.20 no longer upgrades a hover-only response to a clickable
@@ -528,10 +586,9 @@ impl HeroinnApp {
             .column(Column::initial(160.0).at_least(50.0))
             .column(Column::initial(110.0).at_least(50.0))
             .column(Column::initial(150.0).at_least(50.0))
-            .column(Column::initial(210.0).at_least(50.0))
-            .column(Column::initial(100.0).at_least(50.0))
-            .column(Column::initial(100.0).at_least(50.0))
-            .column(Column::initial(100.0).at_least(50.0))
+            .column(Column::initial(220.0).at_least(50.0))
+            .column(Column::initial(140.0).at_least(50.0))
+            .column(Column::initial(130.0).at_least(50.0))
             .column(Column::initial(150.0).at_least(50.0))
             .column(Column::initial(150.0).at_least(50.0))
             .resizable(self.resizable)
@@ -555,10 +612,7 @@ impl HeroinnApp {
                     ui.heading("Protocol");
                 });
                 header.col(|ui| {
-                    ui.heading("In Rate");
-                });
-                header.col(|ui| {
-                    ui.heading("Out Rate");
+                    ui.heading("Transfer Rate");
                 });
                 header.col(|ui| {
                     ui.heading("Last Heartbeat");
@@ -588,6 +642,16 @@ impl HeroinnApp {
                                     msgbox::error(&"Shell".to_string(), &format!("{}", e));
                                 }
                             };
+                            ui.close();
+                        }
+                        let rate_requested = std::cell::Cell::new(false);
+                        ui.menu_button("Setting", |ui| {
+                            if ui.button("Set Tranfer Rate").clicked() {
+                                *rate_dialog_request.borrow_mut() = Some(clientid.clone());
+                                rate_requested.set(true);
+                            }
+                        });
+                        if rate_requested.get() {
                             ui.close();
                         }
                     };
@@ -628,15 +692,15 @@ impl HeroinnApp {
 
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
-                            let in_rate = info.in_rate / (secs + HEART_BEAT_TIME);
-                            ui.label(transfer_speed(in_rate as f64));
-                        })
-                        .1.context_menu(menu);
-
-                        row.col(|ui| {
-                            let secs = cur_timestamp_secs() - info.last_heartbeat;
-                            let out_rate = info.out_rate / (secs + HEART_BEAT_TIME);
-                            ui.label(transfer_speed(out_rate as f64));
+                            let window = (secs + HEART_BEAT_TIME) as f64;
+                            let in_rate = info.in_rate as f64 / window;
+                            let out_rate = info.out_rate as f64 / window;
+                            ui.label(transfer_speed(in_rate + out_rate))
+                                .on_hover_text(format!(
+                                    "In {} / Out {}",
+                                    transfer_speed(in_rate),
+                                    transfer_speed(out_rate)
+                                ));
                         })
                         .1.context_menu(menu);
 
@@ -655,5 +719,106 @@ impl HeroinnApp {
                     });
                 }
             });
+
+        if let Some(clientid) = rate_dialog_request.borrow_mut().take() {
+            self.open_transfer_rate_dialog(clientid);
+        }
+    }
+
+    fn open_transfer_rate_dialog(&mut self, clientid: String) {
+        let transfer_rate = get_hostinfo_by_clientid(&clientid)
+            .map(|host| host.transfer_rate)
+            .unwrap_or(DEFAULT_TRANSFER_RATE);
+        let (value, unit) = format_transfer_rate_input(transfer_rate);
+
+        self.transfer_rate_dialog = Some(TransferRateDialog {
+            clientid,
+            value,
+            unit,
+            error: None,
+        });
+    }
+
+    fn show_transfer_rate_dialog(&mut self, ctx: &egui::Context) {
+        let mut submit = false;
+        let mut cancel = false;
+
+        if let Some(dialog) = self.transfer_rate_dialog.as_mut() {
+            egui::Window::new("Set Tranfer Rate")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    let host = get_hostinfo_by_clientid(&dialog.clientid)
+                        .map(|host| format!("{} ({})", host.info.host_name, host.peer_addr))
+                        .unwrap_or_else(|| dialog.clientid.clone());
+
+                    ui.label(host);
+                    ui.label("Applies to all client traffic, including files and shells.");
+                    ui.add_space(4.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Rate:");
+                        let response = ui.add(
+                            egui::TextEdit::singleline(&mut dialog.value)
+                                .desired_width(120.0)
+                                .hint_text("1"),
+                        );
+                        if response.changed() {
+                            dialog.error = None;
+                        }
+
+                        let selected_unit = dialog.unit.label();
+                        egui::ComboBox::from_id_salt("transfer_rate_unit")
+                            .selected_text(selected_unit)
+                            .width(70.0)
+                            .show_ui(ui, |ui| {
+                                for unit in TransferRateUnit::ALL {
+                                    if ui
+                                        .selectable_value(&mut dialog.unit, unit, unit.label())
+                                        .clicked()
+                                    {
+                                        dialog.error = None;
+                                    }
+                                }
+                            });
+                    });
+
+                    if let Some(error) = &dialog.error {
+                        let color = ui.visuals().error_fg_color;
+                        ui.colored_label(color, error);
+                    }
+
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() {
+                            submit = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+        }
+
+        if submit {
+            let outcome = match self.transfer_rate_dialog.as_ref() {
+                Some(dialog) => parse_transfer_rate(&dialog.value, dialog.unit).and_then(|bytes| {
+                    set_transfer_rate(&dialog.clientid, bytes).map_err(|e| format!("{}", e))
+                }),
+                None => Ok(()),
+            };
+
+            match outcome {
+                Ok(()) => self.transfer_rate_dialog = None,
+                Err(error) => {
+                    if let Some(dialog) = self.transfer_rate_dialog.as_mut() {
+                        dialog.error = Some(error);
+                    }
+                }
+            }
+        } else if cancel {
+            self.transfer_rate_dialog = None;
+        }
     }
 }

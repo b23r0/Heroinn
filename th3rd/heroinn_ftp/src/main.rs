@@ -33,7 +33,7 @@ enum SwitchDock {
     Transfer,
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum FSType {
     Local,
     Remote,
@@ -46,6 +46,13 @@ impl std::fmt::Debug for FSType {
             Self::Remote => write!(f, "Remote FS"),
         }
     }
+}
+
+fn can_enter(info: &FileInfo) -> bool {
+    info.typ == "FOLDER"
+        || info.typ == "SSD"
+        || info.typ == "HDD"
+        || info.typ.ends_with(" Drive")
 }
 
 /// Decode an embedded `.ico` resource into a GPU-resident egui texture.
@@ -349,10 +356,46 @@ impl FtpApp {
         });
     }
 
+    fn enter_entry(&mut self, typ: FSType, info: &FileInfo) -> Result<(), String> {
+        if !can_enter(info) {
+            return Ok(());
+        }
+
+        if typ == FSType::Local {
+            let fullpath = join_path(vec![self.local_path.clone(), info.name.clone()])
+                .map_err(|e| format!("join local path failed: {}", e))?
+                .into_iter()
+                .next()
+                .ok_or_else(|| "join local path returned no path".to_string())?;
+            let entries = get_local_folder_info(&fullpath)
+                .map_err(|e| format!("get folder info failed: {}", e))?;
+
+            self.local_folder_strace.push(self.local_path.clone());
+            self.local_path = fullpath;
+            self.local_disk_info = entries;
+        } else {
+            let fullpath = get_remote_join_path(&self.sender, &self.remote_path, &info.name)
+                .map_err(|e| format!("join remote path failed: {}", e))?;
+            let entries = get_remote_folder_info(&self.sender, &fullpath)
+                .map_err(|e| format!("get remote folder info failed: {}", e))?;
+
+            self.remote_folder_strace.push(self.remote_path.clone());
+            self.remote_path = fullpath;
+            self.remote_disk_info = entries;
+        }
+
+        Ok(())
+    }
+
     fn file_table(&mut self, id: &str, ui: &mut egui::Ui, typ: FSType) {
         ui.push_id(id, |ui| {
+            let folder_image = self.folder_image.clone();
+            let drive_image = self.drive_image.clone();
+            let file_image = self.file_image.clone();
+
             egui_extras::TableBuilder::new(ui)
                 .striped(true)
+                .sense(egui::Sense::click())
                 .resizable(true)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .column(Column::initial(50.0).at_least(50.0))
@@ -389,67 +432,9 @@ impl FtpApp {
                         let filename = i.name.clone();
 
                         let mut menu = |ui: &mut egui::Ui| {
-                            if (i.typ == "FOLDER"
-                                || i.typ == "SSD"
-                                || i.typ == "HDD" || i.typ == "Unknown Drive") && ui.button("Open").clicked() {
-                                if typ == FSType::Local {
-                                    let fullpath = join_path(vec![
-                                        self.local_path.clone(),
-                                        filename.clone(),
-                                    ])
-                                    .unwrap()[0]
-                                        .clone();
-
-                                    self.local_disk_info =
-                                        match get_local_folder_info(&fullpath) {
-                                            Ok(p) => p,
-                                            Err(e) => {
-                                                msgbox::error(
-                                                    &self.title.to_string(),
-                                                    &format!("get folder info failed : {}", e),
-                                                );
-                                                ui.close();
-                                                return;
-                                            }
-                                        };
-
-                                    self.local_folder_strace.push(self.local_path.clone());
-                                    self.local_path = fullpath;
-                                } else {
-                                    let fullpath = match get_remote_join_path(
-                                        &self.sender,
-                                        &self.remote_path,
-                                        &filename,
-                                    ) {
-                                        Ok(p) => p,
-                                        Err(e) => {
-                                            msgbox::error(
-                                                &self.title.to_string(),
-                                                &format!("join remote path failed : {}", e),
-                                            );
-                                            ui.close();
-                                            return;
-                                        }
-                                    };
-
-                                    self.remote_disk_info =
-                                        match get_remote_folder_info(&self.sender, &fullpath) {
-                                            Ok(p) => p,
-                                            Err(e) => {
-                                                msgbox::error(
-                                                    &self.title.to_string(),
-                                                    &format!(
-                                                        "get remote folder info failed : {}",
-                                                        e
-                                                    ),
-                                                );
-                                                ui.close();
-                                                return;
-                                            }
-                                        };
-
-                                    self.remote_folder_strace.push(self.remote_path.clone());
-                                    self.remote_path = fullpath;
+                            if can_enter(&i) && ui.button("Open").clicked() {
+                                if let Err(e) = self.enter_entry(typ, &i) {
+                                    msgbox::error(&self.title.to_string(), &e);
                                 }
                                 ui.close();
                             }
@@ -634,17 +619,18 @@ impl FtpApp {
                         };
 
                         let row_height = 20.0;
+                        let mut open_requested = false;
                         body.row(row_height, |mut row| {
                             row.col(|ui| {
                                 let icon = if i.typ == "FOLDER" {
-                                    &self.folder_image
+                                    &folder_image
                                 } else if i.typ == "SSD"
                                     || i.typ == "HDD"
                                     || i.typ == "Unknown Drive"
                                 {
-                                    &self.drive_image
+                                    &drive_image
                                 } else {
-                                    &self.file_image
+                                    &file_image
                                 };
                                 if let Some(tex) = icon {
                                     ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
@@ -684,7 +670,17 @@ impl FtpApp {
                             .1.context_menu(|ui| {
                                 menu(ui);
                             });
+
+                            if can_enter(&i) && row.response().double_clicked() {
+                                open_requested = true;
+                            }
                         });
+
+                        if open_requested
+                            && let Err(e) = self.enter_entry(typ, &i)
+                        {
+                            msgbox::error(&self.title.to_string(), &e);
+                        }
                     }
                 });
         });
@@ -900,4 +896,31 @@ fn main() {
         Box::new(|_cc| Ok(Box::new(FtpApp::new(sender)))),
     )
     .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::can_enter;
+    use heroinn_util::ftp::FileInfo;
+
+    fn file_info(typ: &str) -> FileInfo {
+        FileInfo {
+            name: String::from("entry"),
+            typ: String::from(typ),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn folders_and_drives_can_be_entered() {
+        for typ in ["FOLDER", "SSD", "HDD", "Unknown Drive"] {
+            assert!(can_enter(&file_info(typ)), "{typ} should be enterable");
+        }
+    }
+
+    #[test]
+    fn regular_files_cannot_be_entered() {
+        assert!(!can_enter(&file_info("FILE")));
+        assert!(!can_enter(&file_info("SYMLINK")));
+    }
 }

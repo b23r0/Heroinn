@@ -11,9 +11,9 @@ use heroinn_core::module::ftp::FtpServer;
 use heroinn_core::module::shell::ShellServer;
 use heroinn_util::session::{ServerSession, Session, SessionBase, SessionManager, SessionPacket};
 use heroinn_util::{
-    Error, HEART_BEAT_TIME, HeroinnClientMsgID, HeroinnProtocol, HeroinnServerCommandID, Result,
-    cur_timestamp_secs,
-    packet::{HostInfo, Message},
+    DEFAULT_TRANSFER_RATE, Error, HEART_BEAT_TIME, HeroinnClientMsgID, HeroinnProtocol,
+    HeroinnServerCommandID, Result, cur_timestamp_secs,
+    packet::{HostInfo, Message, TransferRate},
     protocol::Listener,
 };
 
@@ -25,6 +25,7 @@ pub struct UIHostInfo {
     pub proto: HeroinnProtocol,
     pub in_rate: u64,
     pub out_rate: u64,
+    pub transfer_rate: u64,
     pub last_heartbeat: u64,
     pub info: HostInfo,
 }
@@ -100,18 +101,37 @@ pub fn cb_msg(msg: Message) {
 
             log::info!("hostinfo : {}", msg.clientid());
 
-            G_ONLINE_HOSTS.lock().unwrap().insert(
-                msg.clientid().to_string(),
-                UIHostInfo {
-                    clientid: msg.clientid().to_string(),
-                    peer_addr: msg.peer_addr(),
-                    proto: msg.proto(),
-                    in_rate: 0,
-                    out_rate: msg.length() as u64,
-                    last_heartbeat: cur_timestamp_secs(),
-                    info,
-                },
-            );
+            let transfer_rate = {
+                let mut hosts = G_ONLINE_HOSTS.lock().unwrap();
+                let transfer_rate = hosts
+                    .get(msg.clientid())
+                    .map(|host| host.transfer_rate)
+                    .unwrap_or(DEFAULT_TRANSFER_RATE);
+
+                hosts.insert(
+                    msg.clientid().to_string(),
+                    UIHostInfo {
+                        clientid: msg.clientid().to_string(),
+                        peer_addr: msg.peer_addr(),
+                        proto: msg.proto(),
+                        in_rate: 0,
+                        out_rate: msg.length() as u64,
+                        transfer_rate,
+                        last_heartbeat: cur_timestamp_secs(),
+                        info,
+                    },
+                );
+
+                transfer_rate
+            };
+
+            if let Err(e) = send_transfer_rate(msg.clientid(), transfer_rate) {
+                log::warn!(
+                    "failed to apply transfer rate to {} : {}",
+                    msg.clientid(),
+                    e
+                );
+            }
         }
         Ok(HeroinnClientMsgID::Heartbeat) => {
             log::info!("heartbeat : {}", msg.clientid());
@@ -169,6 +189,37 @@ pub fn send_data_by_clientid(clientid: &str, buf: &[u8]) -> Result<()> {
         if server.proto() == host.proto && server.contains_addr(&host.peer_addr) {
             server.sendto(&host.peer_addr, buf)?;
         }
+    }
+
+    Ok(())
+}
+
+fn send_transfer_rate(clientid: &str, bytes_per_sec: u64) -> Result<()> {
+    let data = Message::build(
+        HeroinnServerCommandID::SetTransferRate.to_u8(),
+        clientid,
+        TransferRate { bytes_per_sec },
+    )?;
+
+    send_data_by_clientid(clientid, &data)
+}
+
+/// Update and push the aggregate transfer-rate limit for `clientid`.
+pub fn set_transfer_rate(clientid: &str, bytes_per_sec: u64) -> Result<()> {
+    if bytes_per_sec == 0 {
+        return Err(Error::Other(
+            "transfer rate must be greater than zero".to_string(),
+        ));
+    }
+
+    if get_hostinfo_by_clientid(clientid).is_none() {
+        return Err(Error::NotFound(format!("client {}", clientid)));
+    }
+
+    send_transfer_rate(clientid, bytes_per_sec)?;
+
+    if let Some(host) = G_ONLINE_HOSTS.lock().unwrap().get_mut(clientid) {
+        host.transfer_rate = bytes_per_sec;
     }
 
     Ok(())

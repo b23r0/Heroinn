@@ -9,6 +9,7 @@ authors.workspace = true
 eframe.workspace = true
 egui_extras.workspace = true
 image.workspace = true
+profiling.workspace = true
 log.workspace = true
 simple_logger = { workspace = true, features = ["threads"] }
 rfd.workspace = true

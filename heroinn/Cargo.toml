@@ -9,6 +9,7 @@ authors.workspace = true
 eframe.workspace = true
 egui_extras.workspace = true
 image.workspace = true
+profiling.workspace = true
 heroinn_util.workspace = true
 heroinn_core.workspace = true
 log.workspace = true

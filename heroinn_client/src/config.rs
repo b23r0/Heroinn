@@ -3,10 +3,13 @@ use heroinn_util::{ConnectionInfo, HeroinnProtocol};
 use crate::G_DNA;
 
 pub fn master_configure() -> ConnectionInfo {
-    let size = u64::from_be_bytes(G_DNA.size);
+    // Force a runtime read so optimization cannot replace the mutable-on-disk
+    // stamp with its original zero-filled constant value.
+    let dna = std::hint::black_box(G_DNA);
+    let size = u64::from_be_bytes(dna.size);
 
     // if not write the line , flag will be compiler optimized.
-    log::trace!("flag : {:?}", G_DNA.flag);
+    log::trace!("flag : {:?}", dna.flag);
 
     if size == 0 {
         log::debug!("use default config");
@@ -17,12 +20,15 @@ pub fn master_configure() -> ConnectionInfo {
         };
     }
 
-    if size > 1024 {
-        log::error!("parse master connection info data too long");
-        std::process::exit(0);
-    }
+    let payload = match dna.payload() {
+        Ok(payload) => payload,
+        Err(e) => {
+            log::error!("parse master connection info failed : {}", e);
+            std::process::exit(0);
+        }
+    };
 
-    match ConnectionInfo::parse(&G_DNA.data[..size as usize]) {
+    match ConnectionInfo::parse(payload) {
         Ok(p) => p,
         Err(_) => {
             log::error!("parse master connection info failed");

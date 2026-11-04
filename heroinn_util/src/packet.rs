@@ -47,6 +47,12 @@ pub struct Heartbeat {
     pub out_rate: u64,
 }
 
+/// Aggregate client transfer-rate limit, in bytes per second.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TransferRate {
+    pub bytes_per_sec: u64,
+}
+
 /// A decoded envelope, tagged with the transport it arrived on.
 pub struct Message {
     id: u8,
@@ -122,5 +128,36 @@ impl Message {
 
     pub fn parse_sessionpacket(&self) -> Result<SessionPacket> {
         Ok(serde_json::from_str(&self.data)?)
+    }
+
+    pub fn parse_transfer_rate(&self) -> Result<TransferRate> {
+        Ok(serde_json::from_str(&self.data)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{HeroinnProtocol, HeroinnServerCommandID};
+
+    #[test]
+    fn transfer_rate_command_round_trips() {
+        let peer = "127.0.0.1:9001".parse().unwrap();
+        let setting = TransferRate {
+            bytes_per_sec: 512 * 1024,
+        };
+
+        let buf = Message::build(
+            HeroinnServerCommandID::SetTransferRate.to_u8(),
+            "client-1",
+            setting.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(buf[0], 0x03);
+
+        let msg = Message::new(peer, HeroinnProtocol::TCP, &buf).unwrap();
+        assert_eq!(msg.clientid(), "client-1");
+        assert_eq!(msg.parse_transfer_rate().unwrap(), setting);
     }
 }

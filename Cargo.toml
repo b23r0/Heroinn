@@ -59,6 +59,10 @@ eframe = "0.36"
 egui_extras = "0.36"
 image = { version = "0.25", features = ["jpeg", "png", "ico"] }
 rfd = "0.17"
+# epaint 0.36 calls profiling macros but depends on profiling without enabling
+# its default `procmacros` feature. GUI crates depend on this directly so Cargo
+# feature unification keeps the published epaint release buildable.
+profiling = { version = "1.0", features = ["procmacros"] }
 
 # Platform
 libc = "0.2"
