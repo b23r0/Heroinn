@@ -6,11 +6,11 @@ members = [
     "heroinn_core",
     "heroinn_util",
     "th3rd/heroinn_ftp",
-    # Vendored fork of alacritty that backs the interactive shell: its bin target
-    # is the `heroinn_shell` terminal window the server spawns per session.
-    "th3rd/alacritty-driver/alacritty",
-    "th3rd/alacritty-driver/alacritty_terminal",
-    "th3rd/alacritty-driver/alacritty_config_derive",
+    # Vendored terminal implementation that backs interactive shell sessions.
+    "th3rd/heroinn_shell",
+    "th3rd/heroinn_shell/protocol",
+    "th3rd/heroinn_shell/alacritty_terminal",
+    "th3rd/heroinn_shell/alacritty_config_derive",
 ]
 
 [workspace.package]
@@ -23,6 +23,7 @@ authors = ["b23r0"]
 # Internal crates
 heroinn_util = { path = "heroinn_util" }
 heroinn_core = { path = "heroinn_core" }
+heroinn_shell_protocol = { path = "th3rd/heroinn_shell/protocol" }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

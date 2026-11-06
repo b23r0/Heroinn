@@ -1,0 +1,11 @@
+[package]
+name = "heroinn_shell_protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license = "MIT/Apache-2.0"
+description = "Shared in-band control frames for the Heroinn terminal window"
+
+[lib]
+path = "src/lib.rs"

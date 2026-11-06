@@ -7,6 +7,7 @@ authors.workspace = true
 
 [dependencies]
 heroinn_util.workspace = true
+heroinn_shell_protocol.workspace = true
 simplelog.workspace = true
 log.workspace = true
 uuid.workspace = true

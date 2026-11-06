@@ -627,12 +627,12 @@ impl HeroinnApp {
 
                     let menu = |ui: &mut egui::Ui| {
                         if ui.button("Shell").clicked() {
-                            match open_shell(&clientid) {
-                                Ok(_) => {}
-                                Err(e) => {
+                            let clientid = clientid.clone();
+                            std::thread::spawn(move || {
+                                if let Err(e) = open_shell(&clientid) {
                                     msgbox::error(&"Shell".to_string(), &format!("{}", e));
                                 }
-                            };
+                            });
                             ui.close();
                         }
                         if ui.button("File").clicked() {
@@ -666,29 +666,35 @@ impl HeroinnApp {
                                 )));
                             }
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
 
                         row.col(|ui| {
                             ui.label(format!("{}", info.peer_addr));
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
 
                         row.col(|ui| {
                             ui.label(info.info.whoami);
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
                         row.col(|ui| {
                             ui.label(info.info.host_name);
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
                         row.col(|ui| {
                             ui.label(info.info.os);
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
                         row.col(|ui| {
                             ui.label(format!("{:?}", info.proto));
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
 
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
@@ -702,7 +708,8 @@ impl HeroinnApp {
                                     transfer_speed(out_rate)
                                 ));
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
 
                         row.col(|ui| {
                             let secs = cur_timestamp_secs() - info.last_heartbeat;
@@ -711,11 +718,13 @@ impl HeroinnApp {
                             }
                             ui.label(format!("{} s", secs));
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
                         row.col(|ui| {
                             ui.label(info.info.remark);
                         })
-                        .1.context_menu(menu);
+                        .1
+                        .context_menu(menu);
                     });
                 }
             });

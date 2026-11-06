@@ -274,10 +274,7 @@ pub fn remove_host(clientid: String) {
     let mut hosts = G_ONLINE_HOSTS.lock().unwrap();
 
     if hosts.contains_key(&clientid) {
-        G_SHELL_SESSION
-            .lock()
-            .unwrap()
-            .close_by_clientid(&clientid);
+        G_SHELL_SESSION.lock().unwrap().close_by_clientid(&clientid);
         G_FTP_SESSION.lock().unwrap().close_by_clientid(&clientid);
         hosts.remove(&clientid);
     }
