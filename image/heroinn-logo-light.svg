@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 192" role="img" aria-labelledby="heroinn-logo-light-title heroinn-logo-light-desc">
+  <title id="heroinn-logo-light-title">Heroinn</title>
+  <desc id="heroinn-logo-light-desc">A geometric H mark connected by a cyan and green signal, followed by the HEROINN wordmark.</desc>
+  <defs>
+    <linearGradient id="heroinn-light-accent" x1="46" y1="96" x2="126" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M46 52v88M126 52v88" stroke="#0B1220" stroke-width="22"/>
+    <path d="M46 96h80" stroke="url(#heroinn-light-accent)" stroke-width="22"/>
+    <circle cx="46" cy="52" r="9" fill="#34D399" stroke="none"/>
+    <circle cx="126" cy="140" r="9" fill="#38BDF8" stroke="none"/>
+
+    <g stroke="#0B1220" stroke-width="13">
+      <path d="M210 68v56M256 68v56M210 96h46"/>
+      <path d="M288 68v56M288 68h38M288 96h32M288 124h38"/>
+      <path d="M354 124V68h29c15 0 24 8 24 20s-9 20-24 20h-29M380 108l26 16"/>
+      <circle cx="448" cy="96" r="28"/>
+      <path d="M494 68v56"/>
+      <path d="M528 124V68l44 56V68"/>
+      <path d="M600 124V68l44 56V68"/>
+    </g>
+  </g>
+</svg>

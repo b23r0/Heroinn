@@ -2,17 +2,17 @@
 use std::{
     collections::HashMap,
     sync::{
-        mpsc::{channel, Sender},
         Arc, RwLock,
+        mpsc::{Sender, channel},
     },
 };
 
-use eframe::{egui, App};
+use eframe::{App, egui};
 use egui_extras::{Column, Size, StripBuilder};
 use heroinn_util::{
     ftp::{
-        method::{join_path, transfer_size, transfer_speed},
         FTPId, FTPPacket, FileInfo,
+        method::{join_path, transfer_size, transfer_speed},
     },
     protocol::tcp::TcpConnection,
     rpc::{RpcClient, RpcMessage},
@@ -49,10 +49,7 @@ impl std::fmt::Debug for FSType {
 }
 
 fn can_enter(info: &FileInfo) -> bool {
-    info.typ == "FOLDER"
-        || info.typ == "SSD"
-        || info.typ == "HDD"
-        || info.typ.ends_with(" Drive")
+    info.typ == "FOLDER" || info.typ == "SSD" || info.typ == "HDD" || info.typ.ends_with(" Drive")
 }
 
 /// Decode an embedded `.ico` resource into a GPU-resident egui texture.
@@ -137,7 +134,11 @@ impl App for FtpApp {
         }
 
         if self.drive_image.is_none() {
-            self.drive_image = Some(load_icon(&ctx, "drive.ico", include_bytes!("res/drive.ico")));
+            self.drive_image = Some(load_icon(
+                &ctx,
+                "drive.ico",
+                include_bytes!("res/drive.ico"),
+            ));
         }
         if self.folder_image.is_none() {
             self.folder_image = Some(load_icon(
@@ -223,7 +224,7 @@ impl FtpApp {
                 ui.heading(format!("{:?}" ,typ));
             });
             ui.separator();
-                
+
             StripBuilder::new(ui)
             .size(Size::exact(20.0))
             .size(Size::exact(5.0))
@@ -244,7 +245,7 @@ impl FtpApp {
                             } else {
                                 ui.label(&self.remote_path);
                             }
-                            
+
                         });
                         strip.strip(|builder|{
                             builder
@@ -264,21 +265,21 @@ impl FtpApp {
                                 strip.cell(|ui|{
                                     if ui.button("Go Back").clicked(){
                                         if typ == FSType::Local{
-        
+
                                             if self.local_folder_strace.is_empty(){
                                                 return;
                                             }
-        
+
                                             let parent_path = self.local_folder_strace.pop().unwrap();
-        
+
                                             if parent_path == FtpApp::ROOT_FLAG{
                                                 self.local_disk_info = get_local_disk_info().unwrap();
                                                 self.local_path = String::from(FtpApp::ROOT_FLAG);
                                                 return;
                                             }
-        
+
                                             let fullpath = join_path(vec![parent_path, ".".to_string()]).unwrap()[0].clone();
-        
+
                                             self.local_disk_info = match get_local_folder_info(&fullpath){
                                                 Ok(p) => p,
                                                 Err(e) => {
@@ -287,16 +288,16 @@ impl FtpApp {
                                                     return;
                                                 },
                                             };
-        
+
                                             self.local_path = fullpath;
                                         } else {
-        
+
                                             if self.remote_folder_strace.is_empty(){
                                                 return;
                                             }
-        
+
                                             let parent_path = self.remote_folder_strace.pop().unwrap();
-        
+
                                             if parent_path == FtpApp::ROOT_FLAG{
                                                 self.remote_disk_info = match get_remote_disk_info(&self.sender){
                                                     Ok(p) => p,
@@ -305,11 +306,11 @@ impl FtpApp {
                                                         return;
                                                     },
                                                 };
-        
+
                                                 self.remote_path = String::from(FtpApp::ROOT_FLAG);
                                                 return;
                                             }
-                                            
+
                                             let fullpath = match get_remote_join_path(&self.sender ,&parent_path, "."){
                                                 Ok(p) => p,
                                                 Err(e) => {
@@ -319,7 +320,7 @@ impl FtpApp {
                                                 },
                                             };
                                             log::debug!("remote full path : {}" , fullpath);
-        
+
                                             self.remote_disk_info = match get_remote_folder_info(&self.sender , &fullpath){
                                                 Ok(p) => p,
                                                 Err(e) => {
@@ -328,7 +329,7 @@ impl FtpApp {
                                                     return;
                                                 },
                                             };
-            
+
                                             self.remote_path = fullpath;
                                         }
                                     }
@@ -337,7 +338,7 @@ impl FtpApp {
 
 
 
-                        });     
+                        });
                     });
                 });
                 strip.cell(|ui|{
@@ -522,21 +523,14 @@ impl FtpApp {
                                         ])
                                         .unwrap()[0]
                                             .clone();
-                                        match upload_file(
-                                            &self.sender,
-                                            &local_path,
-                                            &remote_path,
-                                        ) {
+                                        match upload_file(&self.sender, &local_path, &remote_path) {
                                             Ok(_) => {
                                                 self.switch = SwitchDock::Transfer;
                                             }
                                             Err(e) => {
                                                 msgbox::error(
                                                     &self.title.to_string(),
-                                                    &format!(
-                                                        "download remote file failed : {}",
-                                                        e
-                                                    ),
+                                                    &format!("download remote file failed : {}", e),
                                                 );
                                                 ui.close();
                                                 return;
@@ -633,41 +627,48 @@ impl FtpApp {
                                     &file_image
                                 };
                                 if let Some(tex) = icon {
-                                    ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
-                                        tex.id(),
-                                        egui::Vec2::new(20.0, 20.0),
-                                    )));
+                                    ui.add(egui::Image::from_texture(
+                                        egui::load::SizedTexture::new(
+                                            tex.id(),
+                                            egui::Vec2::new(20.0, 20.0),
+                                        ),
+                                    ));
                                 }
                             })
-                            .1.context_menu(|ui| {
+                            .1
+                            .context_menu(|ui| {
                                 menu(ui);
                             });
 
                             row.col(|ui| {
                                 ui.label(i.name.clone());
                             })
-                            .1.context_menu(|ui| {
+                            .1
+                            .context_menu(|ui| {
                                 menu(ui);
                             });
 
                             row.col(|ui| {
                                 ui.label(i.typ.clone());
                             })
-                            .1.context_menu(|ui| {
+                            .1
+                            .context_menu(|ui| {
                                 menu(ui);
                             });
 
                             row.col(|ui| {
                                 ui.label(transfer_size(i.size as f64));
                             })
-                            .1.context_menu(|ui| {
+                            .1
+                            .context_menu(|ui| {
                                 menu(ui);
                             });
 
                             row.col(|ui| {
                                 ui.label(i.last_modified.clone());
                             })
-                            .1.context_menu(|ui| {
+                            .1
+                            .context_menu(|ui| {
                                 menu(ui);
                             });
 
@@ -676,9 +677,7 @@ impl FtpApp {
                             }
                         });
 
-                        if open_requested
-                            && let Err(e) = self.enter_entry(typ, &i)
-                        {
+                        if open_requested && let Err(e) = self.enter_entry(typ, &i) {
                             msgbox::error(&self.title.to_string(), &e);
                         }
                     }
@@ -737,10 +736,12 @@ impl FtpApp {
                         body.row(row_height, |mut row| {
                             row.col(|ui| {
                                 if let Some(tex) = &self.file_image {
-                                    ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
-                                        tex.id(),
-                                        egui::Vec2::new(20.0, 20.0),
-                                    )));
+                                    ui.add(egui::Image::from_texture(
+                                        egui::load::SizedTexture::new(
+                                            tex.id(),
+                                            egui::Vec2::new(20.0, 20.0),
+                                        ),
+                                    ));
                                 }
                             });
 
@@ -846,26 +847,28 @@ fn main() {
 
     std::thread::Builder::new()
         .name("ftp receiver worker".to_string())
-        .spawn(move || loop {
-            let data = match s.recv() {
-                Ok(p) => p,
-                Err(_) => {
-                    std::process::exit(0);
-                }
-            };
-            let packet = FTPPacket::parse(&data).unwrap();
+        .spawn(move || {
+            loop {
+                let data = match s.recv() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        std::process::exit(0);
+                    }
+                };
+                let packet = FTPPacket::parse(&data).unwrap();
 
-            match packet.id() {
-                Ok(FTPId::RPC) => {
-                    let msg = RpcMessage::parse(&packet.data).unwrap();
-                    log::debug!("ftp recv msg from core : {}", msg.id);
-                    G_RPCCLIENT.write(&msg);
+                match packet.id() {
+                    Ok(FTPId::RPC) => {
+                        let msg = RpcMessage::parse(&packet.data).unwrap();
+                        log::debug!("ftp recv msg from core : {}", msg.id);
+                        G_RPCCLIENT.write(&msg);
+                    }
+                    Ok(FTPId::Close) => {
+                        std::process::exit(0);
+                    }
+                    Ok(FTPId::Get | FTPId::Put) => {}
+                    Err(e) => log::warn!("unknown ftp packet id : {}", e),
                 }
-                Ok(FTPId::Close) => {
-                    std::process::exit(0);
-                }
-                Ok(FTPId::Get | FTPId::Put) => {}
-                Err(e) => log::warn!("unknown ftp packet id : {}", e),
             }
         })
         .unwrap();
@@ -874,15 +877,17 @@ fn main() {
 
     std::thread::Builder::new()
         .name("ftp sender worker".to_string())
-        .spawn(move || loop {
-            let msg = match receiver.recv() {
-                Ok(p) => p,
-                Err(_) => {
-                    std::process::exit(0);
-                }
-            };
-            log::debug!("ftp send msg to core : {}", msg.id);
-            s2.send(&msg.serialize().unwrap()).unwrap();
+        .spawn(move || {
+            loop {
+                let msg = match receiver.recv() {
+                    Ok(p) => p,
+                    Err(_) => {
+                        std::process::exit(0);
+                    }
+                };
+                log::debug!("ftp send msg to core : {}", msg.id);
+                s2.send(&msg.serialize().unwrap()).unwrap();
+            }
         })
         .unwrap();
 

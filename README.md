@@ -1,109 +1,93 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="image/heroinn-logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="image/heroinn-logo-light.svg">
+    <img src="image/heroinn-logo-light.svg" alt="Heroinn logo" width="300">
+  </picture>
+</p>
+
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
+
+<p align="center">
+  <a href="https://github.com/b23r0/Heroinn/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/b23r0/Heroinn/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue.svg"></a>
+  <a href="https://discord.gg/ZKtYMvDFN4"><img alt="Discord" src="https://img.shields.io/badge/chat-on%20Discord-5865F2.svg"></a>
+</p>
+
 # Heroinn
-A cross platform C2/post-exploitation framework implementation by Rust.
 
-![image]( https://github.com/b23r0/Heroinn/blob/master/image/ui.png)
+Heroinn is a cross-platform command-and-control and post-exploitation framework
+written in Rust. It combines a desktop server application, lightweight agents,
+an interactive PTY shell, a resumable file manager, and a client generator for
+authorized security research and red-team exercises.
 
-_This project is for research and study purposes only, and any illegal behavior using this project has nothing to do with this project._
+> **Authorized use only.** Use Heroinn exclusively on systems you own or have
+> explicit permission to test. You are responsible for complying with all
+> applicable laws and authorization requirements.
 
-# Features
+![Heroinn server GUI](image/ui.png)
 
-* GUI
-* Interactive PTY shell
-* System infomations collect
-* File manager support with resume broken transfer and largefile
-* Per-host aggregate transfer throttling (default 1 MB/s) across shell and file traffic
-* Support Win10+(Windows Server 2019+) & Linux & BSD & OSX
-* Multiple communication protocols (TCP & HTTP & reliable UDP)
+## Features
 
-# HTTP and TCP proxy support
+- Desktop GUI for managing listeners, online agents, shell sessions, and files.
+- Interactive PTY shell with a dedicated terminal window per session.
+- File manager with resumable transfers and large-file support.
+- Client generator for producing agents with an embedded connection profile.
+- Per-agent aggregate transfer-rate limit (default 1 MB/s), shared by all inbound
+  and outbound traffic.
+- TCP, HTTP, and reliable UDP transports.
+- Windows 10+ (Windows Server 2019+), Linux, BSD, and macOS support.
+- For TCP and HTTP communication, agents automatically discover the proxy from
+  environment variables or the current desktop/user system settings and can
+  connect through HTTP CONNECT, HTTPS (TLS-to-proxy when an explicit `https://`
+  proxy URL is used), or SOCKS5. Reliable UDP and loopback IPC remain direct.
 
-`HeroinnProtocol::HTTP` and `HeroinnProtocol::TCP` share one outbound
-connection layer. Main connections and the reverse tunnels used by the shell
-and file manager resolve and use the same proxy configuration for every new
-connection. Reliable-UDP connections and loopback-only IPC remain direct.
+## Requirements
 
-Discovery checks explicit environment configuration first:
-
-1. `http_proxy` / `HTTP_PROXY`
-2. `https_proxy` / `HTTPS_PROXY`
-3. `all_proxy` / `ALL_PROXY`
-
-Lowercase names are preferred and uppercase names are the fallback. A
-non-empty environment proxy overrides the desktop setting as a source. If no
-environment proxy is configured, Heroinn reads the current user's manual proxy
-from GNOME on Linux or the current-user Internet Settings registry values on
-Windows. Within one source, the stable order is HTTP, HTTPS and SOCKS5. A
-failed candidate may fall back only to another candidate from that same
-source. Heroinn never falls back to a direct connection after a proxy was
-selected.
-
-Supported proxy URLs are `http://[user:password@]host:port` (HTTP CONNECT with
-optional Basic authentication), `https://[user:password@]host:port` (TLS to the
-proxy using the system trust roots, then HTTP CONNECT inside that TLS session)
-and `socks5://[user:password@]host:port` (SOCKS5 with optional RFC 1929
-username/password authentication). The URL scheme, not the variable name,
-selects the transport: `HTTPS_PROXY=http://host:port` is a plaintext HTTP
-CONNECT, while only an explicit `https://host:port` value uses TLS to the
-proxy. This is not WSS target support; targets remain `ws://` WebSockets or
-raw TCP streams.
-
-Credentials are read only from proxy URL userinfo, held in memory, and
-redacted from Heroinn logs and errors. TLS validation uses the operating
-system trust store and the proxy hostname; there is no production certificate
-verification bypass.
-
-`no_proxy` / `NO_PROXY` supports host names, leading-dot or `*.` suffixes,
-optional ports, IPv4/IPv6 addresses, CIDR ranges and `<local>`. A matching
-destination connects directly. Windows `ProxyOverride` and GNOME
-`ignore-hosts` are used for system-configured proxies.
-
-PAC/WPAD, proxy auto-configuration, NTLM/Kerberos, system credential stores and
-proxy UI are not supported. Linux support targets GNOME manual proxy settings;
-KDE and XFCE settings are not read.
-
-Release clients always write proxy and connection diagnostics to a bounded
-per-user log:
-
-* Linux: `$XDG_STATE_HOME/heroinn/heroinn_client.log`, falling back to
-  `$HOME/.local/state/heroinn/heroinn_client.log`.
-* Windows: `%LOCALAPPDATA%\Heroinn\Logs\heroinn_client.log`.
-
-On Unix the log directory is created with mode `0700` and the log file with
-mode `0600`. On Windows the file inherits the current user's LocalAppData
-profile ACL. Each log is capped at 512 KiB and one previous file is retained
-(`heroinn_client.log.1`), so the pair uses at most 1 MiB. Proxy failures record
-a stable category, the scheme/host/port endpoint and fail-closed state; URL
-userinfo, usernames, passwords and raw credentials are redacted. Windows also
-shows one non-blocking error dialog per distinct proxy failure while the
-client continues its retry loop. Linux additionally writes diagnostics to
-stderr when one is available.
-
-# Building
-
-The workspace builds four binaries: `heroinn` (server GUI), `heroinn_client`
-(payload), `heroinn_ftp` (file manager) and `heroinn_shell`.
-
-`heroinn_shell` is the per-session terminal window the server spawns to drive a
-remote pty. Its source is vendored under `th3rd/alacritty-driver/` — a fork of
-[alacritty](https://github.com/alacritty/alacritty) that replaces the pty with a
-TCP local socket, itself taken from
-[b23r0/alacritty-driver](https://github.com/b23r0/alacritty-driver).
+- Rust 1.95 or newer with Cargo.
+- Linux build dependencies:
 
 ```sh
-cargo build --release
+sudo apt-get install -y \
+  build-essential pkg-config cmake libssl-dev \
+  libfontconfig1-dev libfreetype6-dev libexpat1-dev \
+  libx11-dev libx11-xcb-dev libxcb1-dev libxrandr-dev \
+  libxi-dev libxcursor-dev libxinerama-dev \
+  libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+  libegl1-mesa-dev libvulkan-dev
 ```
 
-The binaries land in `target/release/`, and `heroinn_shell` must sit next to
-`heroinn` because the server spawns it from its working directory.
+- Windows: a normal Rust MSVC toolchain is recommended. Heroinn uses Schannel
+  for TLS and does not require OpenSSL development packages.
+- At runtime on Linux, the terminal component needs libX11, libxcb, libEGL,
+  libwayland-client, libxkbcommon, and libvulkan.
+
+## Build
+
+```sh
+git clone https://github.com/b23r0/Heroinn.git
+cd Heroinn
+cargo build --release --locked
+```
+
+The build produces four executables:
+
+- `heroinn` — server GUI
+- `heroinn_client` — agent
+- `heroinn_ftp` — file manager
+- `heroinn_shell` — terminal window used by interactive shell sessions
+
+`heroinn_shell` must be placed next to the `heroinn` executable because the
+server launches it from its working directory.
 
 ## Client generation
 
-The server's `Generator` tab does not compile a client. It copies a prebuilt
+The server's **Generator** tab does not compile an agent. It copies a prebuilt
 `heroinn_client` and rewrites its embedded connection stamp in place.
 
-Templates are searched next to the running `heroinn` binary first, then in the
-current working directory. The generator accepts the legacy platform-suffixed
-names and the normal Cargo output name:
+Templates are searched next to the running `heroinn` executable first, then in
+the current working directory. Both legacy platform-suffixed names and normal
+Cargo output names are accepted:
 
 | Platform | Template names |
 | --- | --- |
@@ -112,71 +96,71 @@ names and the normal Cargo output name:
 | BSD x86_64 | `heroinn_client_bsd`, `heroinn_client` |
 | macOS x86_64 | `heroinn_client_darwin`, `heroinn_client` |
 
-Build the native client with `cargo build -p heroinn_client --release` and keep
-its binary next to the server. Cross-platform payloads must first be built for
+Build a native agent with `cargo build -p heroinn_client --release --locked` and
+keep it next to the server. Cross-platform agents must first be compiled for
 their target and copied under one of the matching names above.
 
-The generated file inherits the template's permissions, including the Unix
-executable bit. Connection information is limited to 1024 bytes of JSON, and
-the generator refuses templates containing more than one valid stamp.
+The generated executable inherits the template's permissions, including the
+Unix executable bit. Connection information is limited to 1024 bytes of JSON,
+and the generator rejects templates containing more than one valid stamp.
 
-## Build requirements
+## Workspace
 
-The terminal window is an OpenGL application, so on Linux the build needs the
-font and windowing headers, and the font stack is compiled through CMake:
+| Path | Purpose |
+| --- | --- |
+| `heroinn` | Server GUI and controller |
+| `heroinn_client` | Cross-platform agent |
+| `heroinn_core` | Shared application-core logic |
+| `heroinn_util` | Protocol, transport, packet, and utility layers |
+| `th3rd/heroinn_ftp` | File manager |
+| `th3rd/alacritty-driver` | Vendored terminal driver used by `heroinn_shell` |
 
-* `cmake` (used to build the bundled freetype/fontconfig chain)
-* `pkg-config`
-* `libfontconfig` / `libfreetype` / `libexpat` development files
-* `libxcb` development files
-* at runtime: libX11 / libxcb / libEGL / libwayland-client / libxkbcommon / libvulkan
+First-party crates use edition 2024 and share dependency versions pinned at the
+workspace root in `[workspace.dependencies]`. Vendored terminal crates retain
+their upstream editions.
 
-On Windows the driver builds against `winapi`, and no extra system packages are
-required beyond a normal Rust toolchain.
+The vendored terminal driver removes the two inherited PTY backends because
+Heroinn connects through a local TCP socket. The existing windowing stack is
+kept on its current `glutin` release to avoid a separate full rewrite of the
+terminal event loop.
 
-## Dependencies
+## Continuous integration
 
-Every crate is on edition 2024 (`rust-version = "1.85"`), and all
-cross-platform dependency versions are pinned once at the workspace root in
-`[workspace.dependencies]`.
+The GitHub Actions workflow in `.github/workflows/ci.yml` runs on Linux and
+Windows. It verifies `heroinn_ftp` formatting, compiles the workspace, runs the
+applicable unit and integration tests, and builds the release executables with
+the checked-in `Cargo.lock`.
 
-The vendored driver drops the two pty backends it inherited from alacritty —
-`tty/unix.rs` and `tty/windows/`. Heroinn always attaches to the pty through
-the local socket, so neither was reachable; removing them is what lets
-`alacritty_terminal` build without `nix`, `signal-hook`, `mio-anonymous-pipes`,
-`miow` or `winapi`.
+The vendored `alacritty_terminal` library tests run independently. Its
+historical reference-fixture suite is not part of CI because the corresponding
+fixture tree is not included in this repository.
 
-Two pieces of the vendored driver are deliberately left as they were:
+## Roadmap
 
-* the windowing stack (`glutin` 0.28 with its bundled `winit`). glutin 0.28 is
-  the last release with the old `WindowedContext` API; anything newer means
-  porting the whole event/window subsystem to the `glutin-winit` +
-  `ApplicationHandler` model, which is a rewrite of the crate's primary UI that
-  cannot be validated without a display.
+- [ ] Usage documentation
+- [ ] Reverse SOCKS5 proxy support
+- [ ] Shellcode staging, loaders, and generator options
+- [ ] Expanded protocol serialization and interoperability tests
+- [ ] Broader cross-platform packaging
 
-# Todo
+## Contributing
 
-- [ ] Documentation
-  - [ ] usage
-- [ ] reverse socks5 proxy support
-- [ ] shellcode
-  - [ ] stage(.so/.dll) to shellcode
-  - [ ] loader(no stage)
-  - [ ] loader generator
-- [ ] cross firewall
-  - [x] http proxy auto detect
-- [ ] basic
-  - [ ] serilized communication  protocol convert json to bson
-  - [ ] unit test
+Bug reports, feature suggestions, pull requests, and documentation improvements
+are welcome. Before opening a pull request, run the same checks used by CI:
 
+```sh
+cargo fmt -p heroinn_ftp -- --check
+cargo check --workspace --lib --bins --locked
+cargo test --workspace --exclude alacritty_terminal --locked
+cargo test -p alacritty_terminal --lib --locked
+cargo test -p alacritty_config_derive --test config --locked
+cargo build --workspace --release --locked
+```
 
-# Contributing
+Join the community on [Discord](https://discord.gg/ZKtYMvDFN4).
 
-[![ChatOnDiscord](https://img.shields.io/badge/chat-on%20discord-blue)](https://discord.gg/ZKtYMvDFN4)
+## License
 
-* Report a BUG
-* Submit an ISSUE about suggestion
-* Submit a improved PR
-* Supplement the documentation about using `Heroinn`
-
-Everyone for me, I for everyone.
+Heroinn is distributed under the [GNU General Public License v3.0](LICENSE).
+The project logo is an original asset distributed with the project under the
+same license.

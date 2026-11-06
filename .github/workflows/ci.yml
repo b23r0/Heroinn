@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  format:
+    name: Format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust formatter
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Check heroinn_ftp formatting
+        run: cargo fmt -p heroinn_ftp -- --check
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake libssl-dev \
+            libfontconfig1-dev libfreetype6-dev libexpat1-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxinerama-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libegl1-mesa-dev libvulkan-dev
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc -vV
+          cargo -V
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Check locked dependency graph
+        run: cargo metadata --format-version 1 --locked --no-deps
+
+      - name: Compile workspace libraries and binaries
+        run: cargo check --workspace --lib --bins --locked
+
+      - name: Run first-party and supporting tests
+        run: cargo test --workspace --exclude alacritty_terminal --locked
+
+      - name: Run vendored terminal library tests
+        run: cargo test -p alacritty_terminal --lib --locked
+
+      - name: Run configuration integration tests
+        run: cargo test -p alacritty_config_derive --test config --locked
+
+  release:
+    name: Release build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake libssl-dev \
+            libfontconfig1-dev libfreetype6-dev libexpat1-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxinerama-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libegl1-mesa-dev libvulkan-dev
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc -vV
+          cargo -V
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Build release workspace
+        run: cargo build --workspace --release --locked
+
+      - name: Verify Linux release executables
+        if: runner.os == 'Linux'
+        run: |
+          test -x target/release/heroinn
+          test -x target/release/heroinn_client
+          test -x target/release/heroinn_ftp
+          test -x target/release/heroinn_shell
+          file target/release/heroinn target/release/heroinn_client
+
+      - name: Verify Windows release executables
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $artifacts = @(
+            "target/release/heroinn.exe",
+            "target/release/heroinn_client.exe",
+            "target/release/heroinn_ftp.exe",
+            "target/release/heroinn_shell.exe"
+          )
+          foreach ($artifact in $artifacts) {
+            if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+              throw "Missing release artifact: $artifact"
+            }
+            Get-Item -LiteralPath $artifact | Select-Object FullName, Length
+          }

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-labelledby="heroinn-mark-title heroinn-mark-desc">
+  <title id="heroinn-mark-title">Heroinn mark</title>
+  <desc id="heroinn-mark-desc">A geometric H connected by cyan and green signal nodes.</desc>
+  <defs>
+    <linearGradient id="heroinn-mark-accent" x1="56" y1="96" x2="136" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#34D399"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M56 36v120M136 36v120" stroke="#0B1220" stroke-width="28"/>
+    <path d="M56 96h80" stroke="url(#heroinn-mark-accent)" stroke-width="28"/>
+    <circle cx="56" cy="36" r="11" fill="#34D399" stroke="none"/>
+    <circle cx="136" cy="156" r="11" fill="#38BDF8" stroke="none"/>
+  </g>
+</svg>

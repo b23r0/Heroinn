@@ -11,7 +11,7 @@ use heroinn_util::{
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::{net::TcpListener, sync::mpsc::Sender};
 
-use crate::{TransferInfo, G_RPCCLIENT, G_TRANSFER};
+use crate::{G_RPCCLIENT, G_TRANSFER, TransferInfo};
 
 fn send_ftp_packet(sender: &Sender<FTPPacket>, packet: FTPPacket) -> Result<()> {
     match sender.send(packet) {
@@ -92,7 +92,10 @@ pub fn get_remote_join_path(
     cur_path: &str,
     filename: &str,
 ) -> Result<String> {
-    let msg = RpcMessage::build_call("join_path", vec![cur_path.to_string(), filename.to_string()]);
+    let msg = RpcMessage::build_call(
+        "join_path",
+        vec![cur_path.to_string(), filename.to_string()],
+    );
     send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
     match G_RPCCLIENT.wait_msg(&msg.id, 10) {
         Ok(p) => {
@@ -341,11 +344,7 @@ pub fn download_file(
     Ok(())
 }
 
-pub fn upload_file(
-    sender: &Sender<FTPPacket>,
-    local_path: &str,
-    remote_path: &str,
-) -> Result<()> {
+pub fn upload_file(sender: &Sender<FTPPacket>, local_path: &str, remote_path: &str) -> Result<()> {
     let mut header = FTPPutHeader {
         path: remote_path.to_string(),
         total_size: 0,
