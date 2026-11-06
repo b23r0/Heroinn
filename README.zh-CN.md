@@ -119,8 +119,11 @@ JSON；如果模板中存在多个有效连接标记，生成器会拒绝处理�
 ## 持续集成
 
 `.github/workflows/ci.yml` 中的 GitHub Actions 工作流会在 Linux 和 Windows
-上运行：检查 `heroinn_ftp` 格式、编译 workspace、运行适用的单元与集成测试，
-并使用仓库中的 `Cargo.lock` 构建 release 可执行程序。
+上运行：检查 `heroinn_ftp` 格式、对全部项目自身 crate 执行警告即错误的
+Clippy、编译 workspace、运行适用的单元与集成测试，并使用仓库中的
+`Cargo.lock` 构建 release 可执行程序。Release 任务还会实际改写一份
+`heroinn_client` 可执行程序，以确认嵌入的连接标记没有被优化掉，且仍能唯一
+定位并替换。
 
 仓库内置的 `alacritty_terminal` 库测试会单独运行。由于其历史参考快照测试
 所需的数据目录未包含在本仓库中，该部分不会进入 CI。
@@ -141,10 +144,13 @@ JSON；如果模板中存在多个有效连接标记，生成器会拒绝处理�
 ```sh
 cargo fmt -p heroinn_ftp -- --check
 cargo check --workspace --lib --bins --locked
+cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp --all-targets --locked -- -D warnings
 cargo test --workspace --exclude alacritty_terminal --locked
 cargo test -p alacritty_terminal --lib --locked
 cargo test -p alacritty_config_derive --test config --locked
 cargo build --workspace --release --locked
+HEROINN_CLIENT_TEMPLATE=target/release/heroinn_client \
+  cargo test -p heroinn_util --test real_client_template --locked -- --ignored --exact patches_a_real_client_template
 ```
 
 欢迎加入 [Discord 社区](https://discord.gg/ZKtYMvDFN4)。

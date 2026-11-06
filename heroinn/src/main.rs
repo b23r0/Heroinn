@@ -86,10 +86,10 @@ fn client_template_search_dirs() -> Vec<PathBuf> {
         directories.push(directory);
     }
 
-    if let Ok(directory) = std::env::current_dir() {
-        if !directories.contains(&directory) {
-            directories.push(directory);
-        }
+    if let Ok(directory) = std::env::current_dir()
+        && !directories.contains(&directory)
+    {
+        directories.push(directory);
     }
 
     directories

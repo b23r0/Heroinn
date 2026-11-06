@@ -1235,12 +1235,11 @@ fn bypass_rule_matches(rule: &str, target: &Target) -> bool {
         return target_host_is_local(target);
     }
 
-    if let Some((network, prefix)) = rule.split_once('/') {
-        if let (Ok(network), Ok(prefix)) = (network.parse::<IpAddr>(), prefix.parse::<u8>()) {
-            if cidr_contains(network, prefix, target) {
-                return true;
-            }
-        }
+    if let Some((network, prefix)) = rule.split_once('/')
+        && let (Ok(network), Ok(prefix)) = (network.parse::<IpAddr>(), prefix.parse::<u8>())
+        && cidr_contains(network, prefix, target)
+    {
+        return true;
     }
 
     let Some((rule_host, rule_port)) = parse_bypass_host(rule) else {

@@ -127,9 +127,12 @@ terminal event loop.
 ## Continuous integration
 
 The GitHub Actions workflow in `.github/workflows/ci.yml` runs on Linux and
-Windows. It verifies `heroinn_ftp` formatting, compiles the workspace, runs the
-applicable unit and integration tests, and builds the release executables with
-the checked-in `Cargo.lock`.
+Windows. It verifies `heroinn_ftp` formatting, runs Clippy with warnings denied
+on all first-party crates, compiles the workspace, runs the applicable unit and
+integration tests, and builds the release executables with the checked-in
+`Cargo.lock`. The release job also patches a real `heroinn_client` binary to
+prove that its embedded connection stamp survived optimization and remains
+unique and discoverable.
 
 The vendored `alacritty_terminal` library tests run independently. Its
 historical reference-fixture suite is not part of CI because the corresponding
@@ -151,10 +154,13 @@ are welcome. Before opening a pull request, run the same checks used by CI:
 ```sh
 cargo fmt -p heroinn_ftp -- --check
 cargo check --workspace --lib --bins --locked
+cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp --all-targets --locked -- -D warnings
 cargo test --workspace --exclude alacritty_terminal --locked
 cargo test -p alacritty_terminal --lib --locked
 cargo test -p alacritty_config_derive --test config --locked
 cargo build --workspace --release --locked
+HEROINN_CLIENT_TEMPLATE=target/release/heroinn_client \
+  cargo test -p heroinn_util --test real_client_template --locked -- --ignored --exact patches_a_real_client_template
 ```
 
 Join the community on [Discord](https://discord.gg/ZKtYMvDFN4).

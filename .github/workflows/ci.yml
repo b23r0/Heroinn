@@ -72,7 +72,7 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --component clippy
           rustup default stable
           rustc -vV
           cargo -V
@@ -92,6 +92,18 @@ jobs:
 
       - name: Compile workspace libraries and binaries
         run: cargo check --workspace --lib --bins --locked
+
+      - name: Run Clippy on first-party crates
+        run: >-
+          cargo clippy
+          -p heroinn
+          -p heroinn_client
+          -p heroinn_core
+          -p heroinn_util
+          -p heroinn_ftp
+          --all-targets
+          --locked
+          -- -D warnings
 
       - name: Run first-party and supporting tests
         run: cargo test --workspace --exclude alacritty_terminal --locked
@@ -149,6 +161,34 @@ jobs:
 
       - name: Build release workspace
         run: cargo build --workspace --release --locked
+
+      - name: Verify embedded connection stamp (Linux)
+        if: runner.os == 'Linux'
+        env:
+          HEROINN_CLIENT_TEMPLATE: target/release/heroinn_client
+        run: >-
+          cargo test
+          -p heroinn_util
+          --test real_client_template
+          --locked
+          --
+          --ignored
+          --exact
+          patches_a_real_client_template
+
+      - name: Verify embedded connection stamp (Windows)
+        if: runner.os == 'Windows'
+        env:
+          HEROINN_CLIENT_TEMPLATE: target/release/heroinn_client.exe
+        run: >-
+          cargo test
+          -p heroinn_util
+          --test real_client_template
+          --locked
+          --
+          --ignored
+          --exact
+          patches_a_real_client_template
 
       - name: Verify Linux release executables
         if: runner.os == 'Linux'

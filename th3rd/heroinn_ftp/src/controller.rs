@@ -353,17 +353,17 @@ pub fn upload_file(sender: &Sender<FTPPacket>, local_path: &str, remote_path: &s
 
     let msg = RpcMessage::build_call("md5_file", vec![remote_path.to_string()]);
     send_ftp_packet(sender, build_ftp_rpc_packet(&msg)?)?;
-    if let Ok(p) = G_RPCCLIENT.wait_msg(&msg.id, 10) {
-        if p.retcode == 0 {
-            let (remote_file_md5, remote_file_size) =
-                (p.data[0].clone(), p.data[1].parse::<u64>().unwrap());
+    if let Ok(p) = G_RPCCLIENT.wait_msg(&msg.id, 10)
+        && p.retcode == 0
+    {
+        let (remote_file_md5, remote_file_size) =
+            (p.data[0].clone(), p.data[1].parse::<u64>().unwrap());
 
-            let local_md5 = md5_file(vec![local_path.to_string()])?[0].clone();
+        let local_md5 = md5_file(vec![local_path.to_string()])?[0].clone();
 
-            if remote_file_md5 == local_md5 {
-                log::info!("resume broken transfer");
-                header.start_pos = remote_file_size;
-            }
+        if remote_file_md5 == local_md5 {
+            log::info!("resume broken transfer");
+            header.start_pos = remote_file_size;
         }
     };
 

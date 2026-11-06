@@ -30,8 +30,6 @@ static G_CONNECTION_INFO: SlaveDNA = SlaveDNA {
     data: [0u8; 1024],
 };
 
-static G_DNA: &SlaveDNA = &G_CONNECTION_INFO;
-
 fn main() {
     let _ = diagnostics::init_logging();
     log::info!("heroinn_client starting");

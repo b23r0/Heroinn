@@ -1,15 +1,20 @@
-use heroinn_util::{ConnectionInfo, HeroinnProtocol};
+use heroinn_util::{ConnectionInfo, HeroinnProtocol, SlaveDNA};
 
-use crate::G_DNA;
+use crate::G_CONNECTION_INFO;
+
+fn embedded_dna() -> SlaveDNA {
+    // The generator edits these bytes after linking. A volatile runtime load
+    // prevents the compiler from replacing them with the initial zero values.
+    //
+    // SAFETY: G_CONNECTION_INFO is a live immutable static for the whole
+    // program. read_volatile requires a valid, properly aligned pointer.
+    unsafe { std::ptr::read_volatile(std::ptr::addr_of!(G_CONNECTION_INFO)) }
+}
 
 pub fn master_configure() -> ConnectionInfo {
-    // Force a runtime read so optimization cannot replace the mutable-on-disk
-    // stamp with its original zero-filled constant value.
-    let dna = std::hint::black_box(G_DNA);
+    // Keep the load opaque across optimization and LTO passes as well.
+    let dna = std::hint::black_box(embedded_dna());
     let size = u64::from_be_bytes(dna.size);
-
-    // if not write the line , flag will be compiler optimized.
-    log::trace!("flag : {:?}", dna.flag);
 
     if size == 0 {
         log::debug!("use default config");
@@ -34,5 +39,15 @@ pub fn master_configure() -> ConnectionInfo {
             log::error!("parse master connection info failed");
             std::process::exit(0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_stamp_starts_with_the_connection_flag() {
+        assert_eq!(embedded_dna().flag, heroinn_util::dna::CONNECTION_INFO_FLAG);
     }
 }
