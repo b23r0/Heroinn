@@ -4,10 +4,18 @@ use std::{env, fs, path::PathBuf};
 #[test]
 #[ignore = "requires HEROINN_CLIENT_TEMPLATE to point at a built heroinn_client"]
 fn patches_a_real_client_template() {
-    let template = PathBuf::from(
+    let configured_template = PathBuf::from(
         env::var_os("HEROINN_CLIENT_TEMPLATE")
             .expect("HEROINN_CLIENT_TEMPLATE must point at a built heroinn_client"),
     );
+    let template = if configured_template.is_absolute() {
+        configured_template
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("heroinn_util must be inside the workspace")
+            .join(configured_template)
+    };
     let output_directory = env::temp_dir().join(format!(
         "heroinn-real-template-test-{}-{}",
         std::process::id(),

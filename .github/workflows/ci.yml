@@ -165,7 +165,7 @@ jobs:
       - name: Verify embedded connection stamp (Linux)
         if: runner.os == 'Linux'
         env:
-          HEROINN_CLIENT_TEMPLATE: target/release/heroinn_client
+          HEROINN_CLIENT_TEMPLATE: ${{ github.workspace }}/target/release/heroinn_client
         run: >-
           cargo test
           -p heroinn_util
@@ -179,7 +179,7 @@ jobs:
       - name: Verify embedded connection stamp (Windows)
         if: runner.os == 'Windows'
         env:
-          HEROINN_CLIENT_TEMPLATE: target/release/heroinn_client.exe
+          HEROINN_CLIENT_TEMPLATE: ${{ github.workspace }}/target/release/heroinn_client.exe
         run: >-
           cargo test
           -p heroinn_util

@@ -153,6 +153,10 @@ HEROINN_CLIENT_TEMPLATE=target/release/heroinn_client \
   cargo test -p heroinn_util --test real_client_template --locked -- --ignored --exact patches_a_real_client_template
 ```
 
+在 Windows PowerShell 中，请先执行
+`$env:HEROINN_CLIENT_TEMPLATE = "target/release/heroinn_client.exe"`，再运行同一
+条测试命令。
+
 欢迎加入 [Discord 社区](https://discord.gg/ZKtYMvDFN4)。
 
 ## 许可证
