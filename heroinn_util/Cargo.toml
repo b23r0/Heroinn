@@ -19,3 +19,8 @@ websocket.workspace = true
 rust-raknet.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
+url.workspace = true
+native-tls.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg.workspace = true

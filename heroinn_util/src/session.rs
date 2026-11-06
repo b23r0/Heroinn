@@ -6,8 +6,8 @@
 //! session is created, which is why construction lives behind [`ServerSession`]
 //! and [`ClientSession`] rather than on [`Session`] itself.
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::mpsc::Sender;
 
 use serde::{Deserialize, Serialize};
@@ -86,6 +86,13 @@ impl<T: Session> SessionManager<T> {
 
     pub fn contains(&self, id: &str) -> bool {
         self.sessions.contains_key(id)
+    }
+
+    /// Close and remove one session after a write failure.
+    pub fn close(&mut self, id: &str) {
+        if let Some(mut session) = self.sessions.remove(id) {
+            session.close();
+        }
     }
 
     /// Close and drop every session belonging to `clientid`.

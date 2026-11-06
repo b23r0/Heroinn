@@ -2522,6 +2522,7 @@ dependencies = [
  "chrono",
  "log 0.4.35",
  "md-5",
+ "native-tls",
  "path-absolutize",
  "rust-raknet",
  "serde",
@@ -2530,8 +2531,10 @@ dependencies = [
  "sysinfo",
  "thiserror 2.0.21",
  "tokio",
+ "url 2.5.8",
  "uuid",
  "websocket",
+ "winreg",
 ]
 
 [[package]]

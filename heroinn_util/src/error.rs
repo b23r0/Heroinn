@@ -45,6 +45,10 @@ pub enum Error {
     /// Any other, free-form failure.
     #[error("{0}")]
     Other(String),
+
+    /// Proxy discovery or handshake failed.
+    #[error("proxy error: {0}")]
+    Proxy(#[from] crate::protocol::proxy::ProxyError),
 }
 
 /// Convenience alias used throughout the workspace.
@@ -56,5 +60,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// `unwrap` panics on every later lock; the data behind these locks is plain
 /// state that stays consistent enough to keep using.
 pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

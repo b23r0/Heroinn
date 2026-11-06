@@ -11,17 +11,24 @@
 
 pub mod frame;
 pub mod http;
+pub mod outbound;
+pub mod proxy;
 pub mod tcp;
 pub mod udp;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
+use crate::HeroinnProtocol;
 use crate::error::Result;
 use crate::packet::Message;
-use crate::HeroinnProtocol;
 
 use self::http::{WSConnection, WSServer};
+pub use self::outbound::{
+    OutboundConnector, OutboundReader, OutboundStream, OutboundWriter, ProxyContext,
+    TransportFactory,
+};
 use self::tcp::{TcpConnection, TcpServer};
 use self::udp::{UDPConnection, UDPServer};
 
@@ -41,9 +48,32 @@ pub enum Transport {
 impl Transport {
     /// Dial a peer over `protocol`.
     pub fn connect(protocol: &HeroinnProtocol, address: &str) -> Result<Self> {
+        let factory = TransportFactory::system();
+        Self::connect_with_factory(&factory, protocol, address)
+    }
+
+    /// Dial a peer explicitly without proxy discovery.
+    pub fn connect_direct(protocol: &HeroinnProtocol, address: &str) -> Result<Self> {
         Ok(match protocol {
-            HeroinnProtocol::TCP => Self::Tcp(TcpConnection::connect(address)?),
-            HeroinnProtocol::HTTP => Self::Http(WSConnection::connect(address)?),
+            HeroinnProtocol::TCP => Self::Tcp(TcpConnection::connect_direct(address)?),
+            HeroinnProtocol::HTTP => Self::Http(WSConnection::connect_direct(address)?),
+            HeroinnProtocol::UDP => Self::Udp(UDPConnection::connect(address)?),
+        })
+    }
+
+    /// Dial a peer using one shared, injectable outbound factory.
+    pub fn connect_with_factory(
+        factory: &TransportFactory,
+        protocol: &HeroinnProtocol,
+        address: &str,
+    ) -> Result<Self> {
+        Ok(match protocol {
+            HeroinnProtocol::TCP => {
+                Self::Tcp(TcpConnection::connect_with_factory(factory, address)?)
+            }
+            HeroinnProtocol::HTTP => {
+                Self::Http(WSConnection::connect_with_factory(factory, address)?)
+            }
             HeroinnProtocol::UDP => Self::Udp(UDPConnection::connect(address)?),
         })
     }
@@ -54,13 +84,48 @@ impl Transport {
         remote_addr: &str,
         server_local_port: u16,
     ) -> Result<Self> {
+        let factory = TransportFactory::system();
+        Self::tunnel_with_factory(&factory, protocol, remote_addr, server_local_port)
+    }
+
+    /// Dial a reverse tunnel explicitly without proxy discovery.
+    pub fn tunnel_direct(
+        protocol: &HeroinnProtocol,
+        remote_addr: &str,
+        server_local_port: u16,
+    ) -> Result<Self> {
         Ok(match protocol {
-            HeroinnProtocol::TCP => {
-                Self::Tcp(TcpConnection::tunnel(remote_addr, server_local_port)?)
-            }
+            HeroinnProtocol::TCP => Self::Tcp(TcpConnection::tunnel_direct(
+                remote_addr,
+                server_local_port,
+            )?),
             HeroinnProtocol::HTTP => {
-                Self::Http(WSConnection::tunnel(remote_addr, server_local_port)?)
+                Self::Http(WSConnection::tunnel_direct(remote_addr, server_local_port)?)
             }
+            HeroinnProtocol::UDP => {
+                Self::Udp(UDPConnection::tunnel(remote_addr, server_local_port)?)
+            }
+        })
+    }
+
+    /// Dial a reverse tunnel using one shared, injectable outbound factory.
+    pub fn tunnel_with_factory(
+        factory: &TransportFactory,
+        protocol: &HeroinnProtocol,
+        remote_addr: &str,
+        server_local_port: u16,
+    ) -> Result<Self> {
+        Ok(match protocol {
+            HeroinnProtocol::TCP => Self::Tcp(TcpConnection::tunnel_with_factory(
+                factory,
+                remote_addr,
+                server_local_port,
+            )?),
+            HeroinnProtocol::HTTP => Self::Http(WSConnection::tunnel_with_factory(
+                factory,
+                remote_addr,
+                server_local_port,
+            )?),
             HeroinnProtocol::UDP => {
                 Self::Udp(UDPConnection::tunnel(remote_addr, server_local_port)?)
             }
@@ -88,6 +153,35 @@ impl Transport {
             Self::Tcp(c) => c.local_addr(),
             Self::Http(c) => c.local_addr(),
             Self::Udp(c) => c.local_addr(),
+        }
+    }
+
+    /// Credential-free identity of the proxy used by this live connection.
+    pub fn proxy_context(&self) -> Option<&ProxyContext> {
+        match self {
+            Self::Tcp(connection) => connection.proxy_context(),
+            Self::Http(connection) => connection.proxy_context(),
+            Self::Udp(_) => None,
+        }
+    }
+
+    /// Observe a premature remote close without blocking.
+    pub fn remote_closed(&self) -> Result<bool> {
+        match self {
+            Self::Tcp(connection) => connection.remote_closed(),
+            Self::Http(connection) => connection.remote_closed(),
+            Self::Udp(_) => Ok(false),
+        }
+    }
+
+    /// Confirm a finished send-direction transfer was followed by a clean
+    /// remote close. UDP and plain streams retain their existing best-effort
+    /// completion semantics.
+    pub fn wait_for_remote_close(&self, timeout: Duration) -> Result<()> {
+        match self {
+            Self::Tcp(connection) => connection.wait_for_remote_close(timeout),
+            Self::Http(connection) => connection.wait_for_remote_close(timeout),
+            Self::Udp(_) => Ok(()),
         }
     }
 

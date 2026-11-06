@@ -12,8 +12,10 @@ use socket2::{SockRef, TcpKeepalive};
 use crate::error::{Error, Result};
 use crate::packet::Message;
 use crate::protocol::frame::{MAX_PACKET, read_frame, write_frame};
+use crate::protocol::outbound::{OutboundStream, ProxyContext, TransportFactory};
+use crate::protocol::proxy::Destination;
 use crate::protocol::{MessageHandler, TUNNEL_FLAG};
-use crate::{cur_timestamp_secs, HeroinnProtocol};
+use crate::{HeroinnProtocol, cur_timestamp_secs};
 
 /// Accepting side of a TCP listener.
 pub struct TcpServer {
@@ -24,14 +26,16 @@ pub struct TcpServer {
 
 /// One outbound TCP connection.
 pub struct TcpConnection {
-    s: Option<TcpStream>,
+    s: Option<OutboundStream>,
+    proxy_context: Option<ProxyContext>,
     closed: Arc<AtomicBool>,
 }
 
 impl Clone for TcpConnection {
     fn clone(&self) -> Self {
         Self {
-            s: Some(self.s.as_ref().unwrap().try_clone().unwrap()),
+            s: self.s.as_ref().map(|stream| stream.try_clone().unwrap()),
+            proxy_context: self.proxy_context.clone(),
             closed: self.closed.clone(),
         }
     }
@@ -124,9 +128,9 @@ fn accept_connection(
 ) {
     s.set_nonblocking(false).unwrap();
 
-    if let Err(e) = SockRef::from(&s).set_tcp_keepalive(
-        &TcpKeepalive::new().with_time(Duration::from_millis(200)),
-    ) {
+    if let Err(e) = SockRef::from(&s)
+        .set_tcp_keepalive(&TcpKeepalive::new().with_time(Duration::from_millis(200)))
+    {
         log::warn!("failed to enable tcp keepalive : {}", e);
     }
 
@@ -222,32 +226,75 @@ fn serve_tunnel(reader: &mut TcpStream, peer_addr: SocketAddr) {
 }
 
 impl TcpConnection {
-    /// Dial `address`.
-    pub fn connect(address: &str) -> Result<Self> {
+    /// Dial `address` directly, bypassing proxy discovery.
+    pub fn connect_direct(address: &str) -> Result<Self> {
         let address: SocketAddr = address
             .parse()
             .map_err(|e| Error::Other(format!("address format error : {}", e)))?;
 
         Ok(Self {
-            s: Some(TcpStream::connect(address)?),
+            s: Some(OutboundStream::from_tcp(TcpStream::connect(address)?)?),
+            proxy_context: None,
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    /// Dial `remote_addr` and ask it to tunnel to `server_local_port`.
-    pub fn tunnel(remote_addr: &str, server_local_port: u16) -> Result<Self> {
+    /// Backward-compatible direct dialing entry point.
+    pub fn connect(address: &str) -> Result<Self> {
+        Self::connect_direct(address)
+    }
+
+    /// Dial `address` using the shared outbound factory.
+    pub fn connect_with_factory(factory: &TransportFactory, address: &str) -> Result<Self> {
+        let destination = Destination::parse(address)?;
+        let stream = factory.open(&destination)?;
+        let proxy_context = stream.proxy_context().cloned();
+        Ok(Self {
+            s: Some(stream),
+            proxy_context,
+            closed: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Dial a reverse tunnel directly, bypassing proxy discovery.
+    pub fn tunnel_direct(remote_addr: &str, server_local_port: u16) -> Result<Self> {
         let remote_addr: SocketAddr = remote_addr
             .parse()
             .map_err(|e| Error::Other(format!("address format error : {}", e)))?;
 
         log::info!("start tunnel [{}] [{}]", remote_addr, server_local_port);
-        let mut s = TcpStream::connect(remote_addr)?;
+        let mut s = OutboundStream::from_tcp(TcpStream::connect(remote_addr)?)?;
 
         s.write_all(&TUNNEL_FLAG)?;
         s.write_all(&server_local_port.to_be_bytes())?;
 
         Ok(Self {
             s: Some(s),
+            proxy_context: None,
+            closed: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Backward-compatible direct tunnel entry point.
+    pub fn tunnel(remote_addr: &str, server_local_port: u16) -> Result<Self> {
+        Self::tunnel_direct(remote_addr, server_local_port)
+    }
+
+    /// Dial a tunnel using the shared outbound factory.
+    pub fn tunnel_with_factory(
+        factory: &TransportFactory,
+        remote_addr: &str,
+        server_local_port: u16,
+    ) -> Result<Self> {
+        let destination = Destination::parse(remote_addr)?;
+        log::info!("start tunnel [{}] [{}]", remote_addr, server_local_port);
+        let mut s = factory.open(&destination)?;
+        let proxy_context = s.proxy_context().cloned();
+        s.write_all(&TUNNEL_FLAG)?;
+        s.write_all(&server_local_port.to_be_bytes())?;
+        Ok(Self {
+            s: Some(s),
+            proxy_context,
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -275,7 +322,8 @@ impl TcpConnection {
 
             return Ok((
                 Self {
-                    s: Some(s),
+                    s: Some(OutboundStream::from_tcp(s)?),
+                    proxy_context: None,
                     closed: Arc::new(AtomicBool::new(false)),
                 },
                 addr,
@@ -302,8 +350,22 @@ impl TcpConnection {
         Ok(self.stream()?.local_addr()?)
     }
 
+    pub fn proxy_context(&self) -> Option<&ProxyContext> {
+        self.proxy_context.as_ref()
+    }
+
+    pub fn remote_closed(&self) -> Result<bool> {
+        self.stream()?.remote_closed().map_err(Error::Io)
+    }
+
+    pub fn wait_for_remote_close(&self, timeout: Duration) -> Result<()> {
+        self.stream()?
+            .wait_for_remote_close(timeout)
+            .map_err(Error::Io)
+    }
+
     /// Borrow the live stream, failing if the connection is already closed.
-    fn stream(&self) -> Result<&TcpStream> {
+    fn stream(&self) -> Result<&OutboundStream> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(Error::Other("socket closed".to_string()));
         }
@@ -314,7 +376,7 @@ impl TcpConnection {
     }
 
     /// Mutably borrow the live stream, failing if the connection is already closed.
-    fn stream_mut(&mut self) -> Result<&mut TcpStream> {
+    fn stream_mut(&mut self) -> Result<&mut OutboundStream> {
         if self.closed.load(Ordering::Relaxed) {
             return Err(Error::Other("socket closed".to_string()));
         }
@@ -367,4 +429,160 @@ fn test_tcp_tunnel() {
     }
 
     server.close();
+}
+
+#[cfg(test)]
+mod proxy_transport_tests {
+    use super::*;
+    use crate::protocol::outbound::{OutboundConnector, TransportFactory};
+    use crate::protocol::proxy::{ProxyEnvironment, ProxyKind};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
+    use std::thread;
+
+    fn route_with_http(
+        target: &str,
+        proxy_address: SocketAddr,
+    ) -> crate::protocol::proxy::ProxyRoute {
+        let environment = ProxyEnvironment {
+            http_proxy: Some(format!("http://{proxy_address}")),
+            https_proxy: None,
+            all_proxy: None,
+            no_proxy: None,
+        };
+        crate::protocol::proxy::resolve_target_with(target, &environment, None).unwrap()
+    }
+
+    fn spawn_http_proxy() -> (SocketAddr, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let accepted_worker = accepted.clone();
+
+        thread::spawn(move || {
+            let (mut client, _) = listener.accept().unwrap();
+            accepted_worker.fetch_add(1, Ordering::SeqCst);
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while request.len() < 16 * 1024 {
+                use std::io::Read;
+                client.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&request);
+            let authority = request
+                .lines()
+                .next()
+                .and_then(|line| line.strip_prefix("CONNECT "))
+                .and_then(|line| line.split_whitespace().next())
+                .unwrap()
+                .to_string();
+            let upstream = TcpStream::connect(authority).unwrap();
+            client
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .unwrap();
+            let mut upstream_reader = upstream.try_clone().unwrap();
+            let mut upstream_writer = upstream;
+            let mut client_writer = client.try_clone().unwrap();
+            thread::spawn(move || {
+                let _ = std::io::copy(&mut upstream_reader, &mut client_writer);
+                let _ = client_writer.shutdown(std::net::Shutdown::Both);
+            });
+            let mut client_reader = client;
+            let _ = std::io::copy(&mut client_reader, &mut upstream_writer);
+            let _ = upstream_writer.shutdown(std::net::Shutdown::Both);
+        });
+
+        (address, accepted)
+    }
+
+    #[test]
+    fn tcp_direct_main_connection_delivers_frames() {
+        let (message_sender, message_receiver) = mpsc::channel();
+        let mut server = TcpServer::new(
+            "127.0.0.1:0",
+            Arc::new(move |message| {
+                let _ = message_sender.send(message.length());
+            }),
+        )
+        .unwrap();
+        let remote = format!("127.0.0.1:{}", server.local_addr().unwrap().port());
+        let mut client = TcpConnection::connect(&remote).unwrap();
+        let frame = crate::packet::Message::build(0, "test", serde_json::json!({})).unwrap();
+        client.send(&frame).unwrap();
+        assert!(
+            message_receiver
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                > 0
+        );
+        server.close();
+    }
+
+    #[test]
+    fn tcp_main_connection_uses_http_proxy() {
+        let (message_sender, message_receiver) = mpsc::channel();
+        let callback_sender = message_sender;
+        let mut server = TcpServer::new(
+            "127.0.0.1:0",
+            Arc::new(move |message| {
+                let _ = callback_sender.send(message.length());
+            }),
+        )
+        .unwrap();
+        let remote = format!("127.0.0.1:{}", server.local_addr().unwrap().port());
+        let (proxy, accepted) = spawn_http_proxy();
+        let route = route_with_http(&remote, proxy);
+        let connector = Arc::new(OutboundConnector::with_static_route(route));
+        let factory = TransportFactory::with_connector(connector);
+
+        let mut client = TcpConnection::connect_with_factory(&factory, &remote).unwrap();
+        let frame = crate::packet::Message::build(0, "test", serde_json::json!({})).unwrap();
+        client.send(&frame).unwrap();
+        assert!(
+            message_receiver
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                > 0
+        );
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        server.close();
+    }
+
+    #[test]
+    fn tcp_reverse_tunnel_uses_http_proxy() {
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let local_port = target_listener.local_addr().unwrap().port();
+        let mut remote_server = TcpServer::new("127.0.0.1:0", Arc::new(|_| {})).unwrap();
+        let remote = format!("127.0.0.1:{}", remote_server.local_addr().unwrap().port());
+        let (proxy, accepted) = spawn_http_proxy();
+        let route = route_with_http(&remote, proxy);
+        let connector = Arc::new(OutboundConnector::with_static_route(route));
+        let factory = TransportFactory::with_connector(connector);
+
+        let mut client = TcpConnection::tunnel_with_factory(&factory, &remote, local_port).unwrap();
+        let (mut server_side, _) = TcpConnection::tunnel_server(target_listener, 10).unwrap();
+
+        client.send(&[5, 6, 7, 8]).unwrap();
+        assert_eq!(server_side.recv().unwrap(), vec![5, 6, 7, 8]);
+        server_side.send(&[9, 10, 11, 12]).unwrap();
+        assert_eq!(client.recv().unwrap(), vec![9, 10, 11, 12]);
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+        remote_server.close();
+    }
+
+    #[test]
+    fn tcp_fixture_confirms_http_proxy_route_is_selected() {
+        let (proxy, _accepted) = spawn_http_proxy();
+        let route = route_with_http("server.example:443", proxy);
+        assert_eq!(
+            route.source(),
+            Some(crate::protocol::proxy::ProxySource::Environment)
+        );
+        assert_eq!(route.candidates()[0].kind(), ProxyKind::Http);
+    }
 }

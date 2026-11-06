@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex};
 use self::wrapper::{RUdpClient, RUdpServer};
 
 use super::tcp::TcpConnection;
+use crate::HeroinnProtocol;
 use crate::error::{Error, Result};
 use crate::packet::Message;
 use crate::protocol::{MessageHandler, TUNNEL_FLAG};
-use crate::HeroinnProtocol;
 
 /// Byte prefixed to every UDP payload to keep tunnel and data frames apart.
 const UDP_PREFIX: u8 = 0xfe;
@@ -132,7 +132,11 @@ impl UDPServer {
 }
 
 /// Read datagrams until the peer disconnects or requests a tunnel.
-fn handle_connection(client: Arc<RUdpClient>, remote_addr: SocketAddr, on_message: &MessageHandler) {
+fn handle_connection(
+    client: Arc<RUdpClient>,
+    remote_addr: SocketAddr,
+    on_message: &MessageHandler,
+) {
     loop {
         let buf = match client.recv() {
             Ok(p) => p,
@@ -159,7 +163,7 @@ fn handle_connection(client: Arc<RUdpClient>, remote_addr: SocketAddr, on_messag
 fn serve_tunnel(client: Arc<RUdpClient>, port: u16) {
     let full_addr = format!("127.0.0.1:{}", port);
 
-    let tunnel_client = match TcpConnection::connect(&full_addr) {
+    let tunnel_client = match TcpConnection::connect_direct(&full_addr) {
         Ok(p) => p,
         Err(e) => {
             log::error!("tunnel connect failed : {}", e);
