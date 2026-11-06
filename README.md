@@ -124,28 +124,6 @@ Heroinn connects through a local TCP socket. The existing windowing stack is
 kept on its current `glutin` release to avoid a separate full rewrite of the
 terminal event loop.
 
-## Continuous integration
-
-The GitHub Actions workflow in `.github/workflows/ci.yml` runs on Linux and
-Windows. It verifies `heroinn_ftp` formatting, runs Clippy with warnings denied
-on all first-party crates, compiles the workspace, runs the applicable unit and
-integration tests, and builds the release executables with the checked-in
-`Cargo.lock`. The release job also patches a real `heroinn_client` binary to
-prove that its embedded connection stamp survived optimization and remains
-unique and discoverable.
-
-The vendored `alacritty_terminal` library tests run independently. Its
-historical reference-fixture suite is not part of CI because the corresponding
-fixture tree is not included in this repository.
-
-## Roadmap
-
-- [ ] Usage documentation
-- [ ] Reverse SOCKS5 proxy support
-- [ ] Shellcode staging, loaders, and generator options
-- [ ] Expanded protocol serialization and interoperability tests
-- [ ] Broader cross-platform packaging
-
 ## Contributing
 
 Bug reports, feature suggestions, pull requests, and documentation improvements
