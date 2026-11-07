@@ -26,8 +26,8 @@ use crate::packet::Message;
 
 use self::http::{WSConnection, WSServer};
 pub use self::outbound::{
-    OutboundConnector, OutboundReader, OutboundStream, OutboundWriter, ProxyContext,
-    TransportFactory,
+    OutboundConnector, OutboundReader, OutboundStream, OutboundWriter, ProxyChainContext,
+    ProxyContext, RouteReport, TransportFactory,
 };
 use self::tcp::{TcpConnection, TcpServer};
 use self::udp::{UDPConnection, UDPServer};
@@ -161,6 +161,15 @@ impl Transport {
         match self {
             Self::Tcp(connection) => connection.proxy_context(),
             Self::Http(connection) => connection.proxy_context(),
+            Self::Udp(_) => None,
+        }
+    }
+
+    /// Credential-free route details for the successful connection.
+    pub fn route_report(&self) -> Option<&RouteReport> {
+        match self {
+            Self::Tcp(connection) => Some(connection.route_report()),
+            Self::Http(connection) => Some(connection.route_report()),
             Self::Udp(_) => None,
         }
     }

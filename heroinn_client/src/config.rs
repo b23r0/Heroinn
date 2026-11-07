@@ -22,6 +22,7 @@ pub fn master_configure() -> ConnectionInfo {
             protocol: HeroinnProtocol::UDP.to_u8(),
             address: String::from("127.0.0.1:8000"),
             remark: String::from("Default"),
+            socks5_proxy: None,
         };
     }
 

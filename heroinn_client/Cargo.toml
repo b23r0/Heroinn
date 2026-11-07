@@ -16,7 +16,7 @@ os_info.workspace = true
 whoami.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
-conpty = { git = "https://github.com/b23r0/conpty.git" }
+conpty = { path = "../th3rd/heroinn_conpty" }
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_Console"] }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]

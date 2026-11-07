@@ -14,11 +14,12 @@ use std::time::{Duration, Instant};
 
 use native_tls::{TlsConnector, TlsStream};
 
+use crate::Socks5ProxyConfig;
 use crate::error::Result;
 
 use super::proxy::{
-    Destination, DirectProxyResolver, ProxyResolver, ProxyRoute, ProxySource, ProxyTransport,
-    SystemProxyResolver,
+    Destination, DirectProxyResolver, ProxyEndpoint, ProxyError, ProxyResolver, ProxyRoute,
+    ProxySource, ProxyTransport, SystemProxyResolver, socks5_connect,
 };
 
 /// Maximum bytes queued for the TLS writer before `write` applies backpressure.
@@ -28,11 +29,26 @@ pub const MAX_INCOMING_BUFFER: usize = 1024 * 1024;
 const DRIVER_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Credential-free identity of the proxy selected for a live connection.
+/// Credential-free identity of the proxy chain selected for a live connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProxyContext {
+pub struct ProxyChainContext {
     pub source: ProxySource,
     pub endpoint: String,
+    pub system_proxy: Option<String>,
+    pub system_bypassed: bool,
+    pub socks5_proxy: Option<String>,
+}
+
+/// Backward-compatible name used by existing diagnostics.
+pub type ProxyContext = ProxyChainContext;
+
+/// Route state attached to every successfully opened stream.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RouteReport {
+    pub system_proxy: Option<String>,
+    pub system_source: Option<ProxySource>,
+    pub system_bypassed: bool,
+    pub socks5_proxy: Option<String>,
 }
 
 /// The half-duplex read side of an outbound connection.
@@ -58,6 +74,7 @@ pub struct OutboundStream {
     reader: Option<OutboundReader>,
     writer: Option<OutboundWriter>,
     proxy: Option<ProxyContext>,
+    route: RouteReport,
 }
 
 impl fmt::Debug for OutboundStream {
@@ -77,7 +94,7 @@ impl fmt::Debug for OutboundStream {
 
 impl Clone for OutboundStream {
     fn clone(&self) -> Self {
-        Self::from_inner(self.inner.clone(), self.proxy.clone())
+        Self::from_inner(self.inner.clone(), self.proxy.clone(), self.route.clone())
     }
 }
 
@@ -90,6 +107,7 @@ impl OutboundStream {
                 write_lock: Mutex::new(()),
             })),
             None,
+            RouteReport::default(),
         ))
     }
 
@@ -117,12 +135,14 @@ impl OutboundStream {
                 write_lock: Mutex::new(()),
             })),
             None,
+            RouteReport::default(),
         ))
     }
 
     pub(crate) fn from_proxy_transport(
         transport: ProxyTransport,
         proxy: Option<ProxyContext>,
+        route: RouteReport,
     ) -> Result<Self> {
         let mut stream = match transport {
             ProxyTransport::Plain(stream) => {
@@ -136,6 +156,7 @@ impl OutboundStream {
             ProxyTransport::Tls(stream) => Self::from_tls(*stream)?,
         };
         stream.proxy = proxy;
+        stream.route = route;
         Ok(stream)
     }
 
@@ -151,7 +172,7 @@ impl OutboundStream {
         Err(last_error.unwrap_or_else(|| io::Error::other("destination resolved to no addresses")))
     }
 
-    fn from_inner(inner: Arc<Inner>, proxy: Option<ProxyContext>) -> Self {
+    fn from_inner(inner: Arc<Inner>, proxy: Option<ProxyContext>, route: RouteReport) -> Self {
         Self {
             reader: Some(OutboundReader {
                 inner: inner.clone(),
@@ -161,6 +182,7 @@ impl OutboundStream {
             }),
             inner,
             proxy,
+            route,
         }
     }
 
@@ -207,6 +229,10 @@ impl OutboundStream {
 
     pub fn proxy_context(&self) -> Option<&ProxyContext> {
         self.proxy.as_ref()
+    }
+
+    pub fn route_report(&self) -> &RouteReport {
+        &self.route
     }
 
     pub(crate) fn close_reader(&self) -> OutboundReader {
@@ -900,6 +926,7 @@ fn fail_tls_io(shared: &TlsShared, error: io::Error) {
 pub struct OutboundConnector {
     resolver: Arc<dyn ProxyResolver>,
     tls: TlsSetup,
+    specified_socks5: Option<ProxyEndpoint>,
 }
 
 impl Clone for OutboundConnector {
@@ -907,6 +934,7 @@ impl Clone for OutboundConnector {
         Self {
             resolver: self.resolver.clone(),
             tls: self.tls.clone(),
+            specified_socks5: self.specified_socks5.clone(),
         }
     }
 }
@@ -915,6 +943,11 @@ impl OutboundConnector {
     /// Production connector: environment/system discovery plus system roots.
     pub fn system() -> Self {
         Self::with_resolver(Arc::new(SystemProxyResolver))
+    }
+
+    /// Production connector with an optional client-specified SOCKS5 hop.
+    pub fn system_with_specified_socks5(config: Option<&Socks5ProxyConfig>) -> Result<Self> {
+        Self::system().with_optional_specified_socks5(config)
     }
 
     /// Explicit direct connector for local IPC and compatibility paths.
@@ -931,7 +964,11 @@ impl OutboundConnector {
                 TlsSetup::Unavailable(Arc::from(detail))
             }
         };
-        Self { resolver, tls }
+        Self {
+            resolver,
+            tls,
+            specified_socks5: None,
+        }
     }
 
     /// Inject a test connector that adds a private test CA. Production code
@@ -940,7 +977,21 @@ impl OutboundConnector {
         Self {
             resolver: self.resolver,
             tls: TlsSetup::Ready(Arc::new(connector)),
+            specified_socks5: self.specified_socks5,
         }
+    }
+
+    pub fn with_specified_socks5(mut self, config: &Socks5ProxyConfig) -> Result<Self> {
+        self.specified_socks5 = Some(ProxyEndpoint::from_socks5_config(config)?);
+        Ok(self)
+    }
+
+    pub fn with_optional_specified_socks5(
+        mut self,
+        config: Option<&Socks5ProxyConfig>,
+    ) -> Result<Self> {
+        self.specified_socks5 = config.map(ProxyEndpoint::from_socks5_config).transpose()?;
+        Ok(self)
     }
 
     pub fn with_static_route(route: ProxyRoute) -> Self {
@@ -957,8 +1008,19 @@ impl OutboundConnector {
         destination: &Destination,
         route: &ProxyRoute,
     ) -> Result<OutboundStream> {
+        if let Some(specified) = &self.specified_socks5 {
+            return self.open_with_specified_socks5(destination, route, specified);
+        }
+
         if route.is_direct() {
-            return Ok(OutboundStream::connect_direct(destination)?);
+            let mut stream = OutboundStream::connect_direct(destination)?;
+            stream.route = RouteReport {
+                system_proxy: None,
+                system_source: route.source(),
+                system_bypassed: route.was_bypassed(),
+                socks5_proxy: None,
+            };
+            return Ok(stream);
         }
         let connected = super::proxy::connect_via_route_with_tls_metadata(
             destination,
@@ -969,10 +1031,105 @@ impl OutboundConnector {
             connected.transport,
             Some(ProxyContext {
                 source: connected.source,
-                endpoint: connected.endpoint,
+                endpoint: connected.endpoint.clone(),
+                system_proxy: Some(connected.endpoint.clone()),
+                system_bypassed: false,
+                socks5_proxy: None,
             }),
+            RouteReport {
+                system_proxy: Some(connected.endpoint),
+                system_source: route.source(),
+                system_bypassed: false,
+                socks5_proxy: None,
+            },
         )
     }
+
+    fn open_with_specified_socks5(
+        &self,
+        destination: &Destination,
+        system_route: &ProxyRoute,
+        specified: &ProxyEndpoint,
+    ) -> Result<OutboundStream> {
+        let specified_endpoint = specified.safe_label();
+
+        if system_route.is_direct() {
+            let mut connected = specified
+                .connect(destination, self.tls.as_result())
+                .map_err(|error| {
+                    proxy_at_endpoint(ProxySource::Specified, &specified_endpoint, error)
+                })?;
+            connected.clear_handshake_timeouts()?;
+            return OutboundStream::from_proxy_transport(
+                connected,
+                Some(ProxyContext {
+                    source: ProxySource::Specified,
+                    endpoint: specified_endpoint.clone(),
+                    system_proxy: None,
+                    system_bypassed: system_route.was_bypassed(),
+                    socks5_proxy: Some(specified_endpoint.clone()),
+                }),
+                RouteReport {
+                    system_proxy: None,
+                    system_source: system_route.source(),
+                    system_bypassed: system_route.was_bypassed(),
+                    socks5_proxy: Some(specified_endpoint),
+                },
+            );
+        }
+
+        let outer_destination = Destination::parse(&specified.authority())?;
+        let mut connected = super::proxy::connect_via_route_with_tls_metadata(
+            &outer_destination,
+            system_route,
+            self.tls.as_result(),
+        )?;
+
+        match &mut connected.transport {
+            ProxyTransport::Plain(stream) => {
+                socks5_connect(stream, specified, destination).map_err(|error| {
+                    proxy_at_endpoint(ProxySource::Specified, &specified_endpoint, error)
+                })?;
+            }
+            ProxyTransport::Tls(stream) => {
+                socks5_connect(stream.as_mut(), specified, destination).map_err(|error| {
+                    proxy_at_endpoint(ProxySource::Specified, &specified_endpoint, error)
+                })?;
+            }
+        }
+        connected.transport.clear_handshake_timeouts()?;
+
+        let outer_endpoint = connected.endpoint.clone();
+        OutboundStream::from_proxy_transport(
+            connected.transport,
+            Some(ProxyContext {
+                source: connected.source,
+                endpoint: outer_endpoint.clone(),
+                system_proxy: Some(outer_endpoint.clone()),
+                system_bypassed: false,
+                socks5_proxy: Some(specified_endpoint.clone()),
+            }),
+            RouteReport {
+                system_proxy: Some(outer_endpoint),
+                system_source: system_route.source(),
+                system_bypassed: false,
+                socks5_proxy: Some(specified_endpoint),
+            },
+        )
+    }
+}
+
+fn proxy_at_endpoint(source: ProxySource, endpoint: &str, error: crate::Error) -> crate::Error {
+    let proxy_error = match error {
+        crate::Error::Proxy(error) => error,
+        error => ProxyError::Handshake(error.to_string()),
+    };
+    ProxyError::ProxyAtEndpoint {
+        source_kind: Some(source),
+        endpoint: endpoint.to_string(),
+        source: Box::new(proxy_error),
+    }
+    .into()
 }
 
 #[derive(Clone)]
@@ -999,6 +1156,12 @@ pub struct TransportFactory {
 impl TransportFactory {
     pub fn system() -> Self {
         Self::with_connector(Arc::new(OutboundConnector::system()))
+    }
+
+    pub fn system_with_specified_socks5(config: Option<&Socks5ProxyConfig>) -> Result<Self> {
+        Ok(Self::with_connector(Arc::new(
+            OutboundConnector::system_with_specified_socks5(config)?,
+        )))
     }
 
     pub fn direct() -> Self {
@@ -1053,6 +1216,8 @@ pub(crate) mod tests {
     use std::sync::mpsc::{self, Receiver};
     use std::thread;
     use std::time::{Duration, Instant};
+
+    type SocksAuthObservation = (Vec<u8>, Vec<u8>, String);
 
     fn test_tls_connector() -> TlsConnector {
         let ca = Certificate::from_pem(include_bytes!("../../tests/fixtures/tls/ca.pem"))
@@ -1300,6 +1465,151 @@ pub(crate) mod tests {
         address
     }
 
+    fn spawn_http_proxy(accepted: Arc<AtomicUsize>) -> (SocketAddr, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("HTTP proxy listener");
+        let address = listener.local_addr().unwrap();
+        let (request_sender, request_receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut client, _) = listener.accept().expect("HTTP proxy accept");
+            accepted.fetch_add(1, Ordering::SeqCst);
+            let request = read_headers(&mut client);
+            let authority = request
+                .lines()
+                .next()
+                .and_then(|line| line.strip_prefix("CONNECT "))
+                .and_then(|line| line.split_whitespace().next())
+                .unwrap_or_default()
+                .to_string();
+            let _ = request_sender.send(request);
+            let upstream = TcpStream::connect(&authority).expect("HTTP proxy upstream");
+            client
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .unwrap();
+
+            let mut client_reader = client.try_clone().unwrap();
+            let mut upstream_writer = upstream.try_clone().unwrap();
+            thread::spawn(move || {
+                let _ = io::copy(&mut client_reader, &mut upstream_writer);
+                let _ = upstream_writer.shutdown(Shutdown::Write);
+            });
+            let mut upstream_reader = upstream;
+            let _ = io::copy(&mut upstream_reader, &mut client);
+            let _ = client.shutdown(Shutdown::Write);
+        });
+        (address, request_receiver)
+    }
+
+    fn spawn_socks_proxy_requiring_auth(
+        accepted: Arc<AtomicUsize>,
+        approve: bool,
+    ) -> (SocketAddr, Receiver<SocksAuthObservation>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("authenticated SOCKS listener");
+        let address = listener.local_addr().unwrap();
+        let (observation_sender, observation_receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let (mut client, _) = listener.accept().expect("authenticated SOCKS accept");
+            accepted.fetch_add(1, Ordering::SeqCst);
+
+            let mut greeting = [0u8; 2];
+            client.read_exact(&mut greeting).unwrap();
+            let mut methods = vec![0u8; greeting[1] as usize];
+            client.read_exact(&mut methods).unwrap();
+            assert!(methods.contains(&0x02));
+            client.write_all(&[5, 2]).unwrap();
+
+            let mut header = [0u8; 2];
+            client.read_exact(&mut header).unwrap();
+            assert_eq!(header[0], 1);
+            let mut username = vec![0u8; header[1] as usize];
+            client.read_exact(&mut username).unwrap();
+            let mut password_len = [0u8; 1];
+            client.read_exact(&mut password_len).unwrap();
+            let mut password = vec![0u8; password_len[0] as usize];
+            client.read_exact(&mut password).unwrap();
+            client.write_all(&[1, if approve { 0 } else { 1 }]).unwrap();
+            if !approve {
+                return;
+            }
+
+            let mut request = [0u8; 4];
+            client.read_exact(&mut request).unwrap();
+            assert_eq!(&request[..3], &[5, 1, 0]);
+            let host = match request[3] {
+                0x01 => {
+                    let mut octets = [0u8; 4];
+                    client.read_exact(&mut octets).unwrap();
+                    std::net::Ipv4Addr::from(octets).to_string()
+                }
+                0x03 => {
+                    let mut length = [0u8; 1];
+                    client.read_exact(&mut length).unwrap();
+                    let mut domain = vec![0u8; length[0] as usize];
+                    client.read_exact(&mut domain).unwrap();
+                    String::from_utf8(domain).unwrap()
+                }
+                0x04 => {
+                    let mut octets = [0u8; 16];
+                    client.read_exact(&mut octets).unwrap();
+                    std::net::Ipv6Addr::from(octets).to_string()
+                }
+                atyp => panic!("unexpected authenticated SOCKS ATYP {atyp}"),
+            };
+            let mut port = [0u8; 2];
+            client.read_exact(&mut port).unwrap();
+            let target = format!("{host}:{}", u16::from_be_bytes(port));
+            observation_sender
+                .send((username, password, target.clone()))
+                .unwrap();
+
+            let upstream = TcpStream::connect(&target).expect("authenticated SOCKS upstream");
+            client
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
+                .unwrap();
+            let mut upstream_reader = upstream.try_clone().unwrap();
+            let mut client_writer = client.try_clone().unwrap();
+            thread::spawn(move || {
+                let _ = io::copy(&mut upstream_reader, &mut client_writer);
+                let _ = client_writer.shutdown(Shutdown::Both);
+            });
+            let mut upstream_writer = upstream;
+            let _ = io::copy(&mut client, &mut upstream_writer);
+            let _ = upstream_writer.shutdown(Shutdown::Both);
+        });
+        (address, observation_receiver)
+    }
+
+    fn spawn_socks_proxy_rejecting(reply: u8) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("rejecting SOCKS listener");
+        let address = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut client, _) = listener.accept().expect("rejecting SOCKS accept");
+            let mut greeting = [0u8; 2];
+            client.read_exact(&mut greeting).unwrap();
+            let mut methods = vec![0u8; greeting[1] as usize];
+            client.read_exact(&mut methods).unwrap();
+            client.write_all(&[5, 0]).unwrap();
+
+            let mut request = [0u8; 4];
+            client.read_exact(&mut request).unwrap();
+            let address_len = match request[3] {
+                0x01 => 4,
+                0x04 => 16,
+                0x03 => {
+                    let mut length = [0u8; 1];
+                    client.read_exact(&mut length).unwrap();
+                    length[0] as usize
+                }
+                atyp => panic!("unexpected rejected SOCKS ATYP {atyp}"),
+            };
+            let mut ignored = vec![0u8; address_len + 2];
+            client.read_exact(&mut ignored).unwrap();
+            client
+                .write_all(&[5, reply, 0, 1, 127, 0, 0, 1, 0, 80])
+                .unwrap();
+        });
+        address
+    }
+
     fn spawn_echo_server() -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").expect("echo listener");
         let address = listener.local_addr().unwrap();
@@ -1422,6 +1732,32 @@ pub(crate) mod tests {
         TransportFactory::with_connector(connector)
     }
 
+    fn factory_with_two_layer_chain(
+        target: &str,
+    ) -> (TransportFactory, SocketAddr, Receiver<String>) {
+        let inner = spawn_socks_proxy(Arc::new(AtomicUsize::new(0)));
+        let config = Socks5ProxyConfig::new("127.0.0.1", inner.port()).unwrap();
+        let outer_accepted = Arc::new(AtomicUsize::new(0));
+        let (outer, request) = spawn_http_proxy(outer_accepted);
+        let route = proxy::resolve_target_with(
+            target,
+            &ProxyEnvironment {
+                http_proxy: Some(format!("http://{outer}")),
+                ..ProxyEnvironment::default()
+            },
+            None,
+        )
+        .unwrap();
+        let connector = OutboundConnector::with_static_route(route)
+            .with_specified_socks5(&config)
+            .unwrap();
+        (
+            TransportFactory::with_connector(Arc::new(connector)),
+            inner,
+            request,
+        )
+    }
+
     #[test]
     fn https_proxy_uses_tls_before_connect_and_carries_websocket() {
         let mut server = WSServer::new("127.0.0.1:0", Arc::new(|_| {})).expect("WS server");
@@ -1522,6 +1858,84 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn websocket_and_http_tunnel_use_the_same_two_layer_factory() {
+        let mut ws_server = WSServer::new("127.0.0.1:0", Arc::new(|_| {})).unwrap();
+        let ws_remote = format!("127.0.0.1:{}", ws_server.local_addr().unwrap().port());
+        let (factory, inner, request) = factory_with_two_layer_chain(&ws_remote);
+        let mut client = WSConnection::connect_with_factory(&factory, &ws_remote).unwrap();
+        client.send(&[1, 2, 3, 4]).unwrap();
+        assert!(
+            request
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .starts_with(&format!("CONNECT {inner} HTTP/1.1\r\n"))
+        );
+        assert_eq!(
+            client.proxy_context().unwrap().socks5_proxy,
+            Some(format!("socks5://{inner}"))
+        );
+
+        let tunnel_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tunnel_port = tunnel_listener.local_addr().unwrap().port();
+        let (tunnel_factory, _tunnel_inner, _tunnel_request) =
+            factory_with_two_layer_chain(&ws_remote);
+        let mut tunnel =
+            WSConnection::tunnel_with_factory(&tunnel_factory, &ws_remote, tunnel_port).unwrap();
+        let (mut server_side, _) = TcpConnection::tunnel_server(tunnel_listener, 10).unwrap();
+        tunnel.send(&[5, 6, 7, 8]).unwrap();
+        assert_eq!(server_side.recv().unwrap(), vec![5, 6, 7, 8]);
+        server_side.send(&[9, 10, 11, 12]).unwrap();
+        assert_eq!(tunnel.recv().unwrap(), vec![9, 10, 11, 12]);
+        ws_server.close();
+    }
+
+    #[test]
+    fn tcp_main_and_reverse_tunnel_use_the_same_two_layer_factory() {
+        let (message_sender, message_receiver) = mpsc::channel();
+        let mut server = TcpServer::new(
+            "127.0.0.1:0",
+            Arc::new(move |message| {
+                let _ = message_sender.send(message.length());
+            }),
+        )
+        .unwrap();
+        let remote = format!("127.0.0.1:{}", server.local_addr().unwrap().port());
+        let (factory, inner, request) = factory_with_two_layer_chain(&remote);
+        let mut client = TcpConnection::connect_with_factory(&factory, &remote).unwrap();
+        let frame = crate::packet::Message::build(0, "two-layer", serde_json::json!({})).unwrap();
+        client.send(&frame).unwrap();
+        assert!(
+            message_receiver
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                > 0
+        );
+        assert!(
+            request
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .starts_with(&format!("CONNECT {inner} HTTP/1.1\r\n"))
+        );
+        assert_eq!(
+            client.proxy_context().unwrap().socks5_proxy,
+            Some(format!("socks5://{inner}"))
+        );
+
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = target_listener.local_addr().unwrap().port();
+        let (tunnel_factory, _tunnel_inner, _tunnel_request) =
+            factory_with_two_layer_chain(&remote);
+        let mut tunnel =
+            TcpConnection::tunnel_with_factory(&tunnel_factory, &remote, port).unwrap();
+        let (mut server_side, _) = TcpConnection::tunnel_server(target_listener, 10).unwrap();
+        tunnel.send(&[21, 22, 23, 24]).unwrap();
+        assert_eq!(server_side.recv().unwrap(), vec![21, 22, 23, 24]);
+        server_side.send(&[25, 26, 27, 28]).unwrap();
+        assert_eq!(tunnel.recv().unwrap(), vec![25, 26, 27, 28]);
+        server.close();
+    }
+
+    #[test]
     fn tcp_main_connection_uses_socks5_proxy() {
         let (message_sender, message_receiver) = mpsc::channel();
         let mut server = TcpServer::new(
@@ -1547,6 +1961,366 @@ pub(crate) mod tests {
         );
         assert_eq!(accepted.load(Ordering::SeqCst), 1);
         server.close();
+    }
+
+    #[test]
+    fn specified_socks5_connects_directly_when_no_system_route_exists() {
+        let echo = spawn_echo_server();
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let socks = spawn_socks_proxy(accepted.clone());
+        let config = Socks5ProxyConfig::new("127.0.0.1", socks.port()).unwrap();
+        let route =
+            proxy::resolve_target_with(&echo.to_string(), &ProxyEnvironment::default(), None)
+                .unwrap();
+        assert!(route.is_direct());
+        let connector = OutboundConnector::with_static_route(route)
+            .with_specified_socks5(&config)
+            .unwrap();
+        let mut stream = connector
+            .open(&Destination::parse(&echo.to_string()).unwrap())
+            .expect("specified SOCKS5 connection");
+
+        stream.write_all(b"direct-specified").unwrap();
+        let mut echoed = [0u8; 16];
+        stream.read_exact(&mut echoed).unwrap();
+        assert_eq!(&echoed, b"direct-specified");
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
+
+        let context = stream.proxy_context().unwrap();
+        assert_eq!(context.source, ProxySource::Specified);
+        assert_eq!(context.socks5_proxy, Some(format!("socks5://{socks}")));
+        assert_eq!(stream.route_report().system_proxy, None);
+        assert_eq!(
+            stream.route_report().socks5_proxy,
+            Some(format!("socks5://{socks}"))
+        );
+    }
+
+    #[test]
+    fn specified_socks5_uses_rfc1929_and_ipv4_ipv6_and_domain_targets() {
+        for target in ["127.0.0.1", "::1", "localhost"] {
+            let listener = TcpListener::bind(if target == "::1" {
+                "[::1]:0"
+            } else {
+                "127.0.0.1:0"
+            });
+            let Ok(listener) = listener else {
+                continue;
+            };
+            let address = listener.local_addr().unwrap();
+            let accept = thread::spawn(move || listener.accept().map(|(stream, _)| stream));
+
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let (socks, observation) = spawn_socks_proxy_requiring_auth(accepted.clone(), true);
+            let config = Socks5ProxyConfig::with_auth(
+                "127.0.0.1",
+                socks.port(),
+                "synthetic-user",
+                "synthetic-password",
+            )
+            .unwrap();
+            let route = ProxyRoute::direct();
+            let connector = OutboundConnector::with_static_route(route)
+                .with_specified_socks5(&config)
+                .unwrap();
+            let destination = Destination::parse(&format!(
+                "{}:{}",
+                if target.contains(':') {
+                    format!("[{target}]")
+                } else {
+                    target.to_string()
+                },
+                address.port()
+            ))
+            .unwrap();
+            let stream = connector.open(&destination).unwrap();
+            let credentials = observation
+                .recv_timeout(Duration::from_secs(3))
+                .expect("inner SOCKS observation");
+            assert_eq!(credentials.0, b"synthetic-user");
+            assert_eq!(credentials.1, b"synthetic-password");
+            assert!(credentials.2.ends_with(&address.port().to_string()));
+            assert_eq!(accepted.load(Ordering::SeqCst), 1);
+            drop(stream);
+            drop(accept.join().unwrap().unwrap());
+        }
+    }
+
+    #[test]
+    fn specified_socks5_forms_fixed_two_layer_chains_for_http_https_and_socks5() {
+        let echo = spawn_echo_server();
+        let inner = spawn_socks_proxy(Arc::new(AtomicUsize::new(0)));
+        let config = Socks5ProxyConfig::new("127.0.0.1", inner.port()).unwrap();
+        let outer_http_accepted = Arc::new(AtomicUsize::new(0));
+        let (outer_http, http_request) = spawn_http_proxy(outer_http_accepted.clone());
+        let http_route = proxy::resolve_target_with(
+            &echo.to_string(),
+            &ProxyEnvironment {
+                http_proxy: Some(format!("http://{outer_http}")),
+                ..ProxyEnvironment::default()
+            },
+            None,
+        )
+        .unwrap();
+        let http_connector = OutboundConnector::with_static_route(http_route)
+            .with_specified_socks5(&config)
+            .unwrap();
+        let mut stream = http_connector
+            .open(&Destination::parse(&echo.to_string()).unwrap())
+            .expect("HTTP outer SOCKS5 chain");
+        stream.write_all(b"http-outer").unwrap();
+        let mut echoed = [0u8; 10];
+        stream.read_exact(&mut echoed).unwrap();
+        assert_eq!(&echoed, b"http-outer");
+        let request = http_request
+            .recv_timeout(Duration::from_secs(3))
+            .expect("HTTP outer CONNECT");
+        assert!(request.starts_with(&format!("CONNECT {inner} HTTP/1.1\r\n")));
+        assert_eq!(outer_http_accepted.load(Ordering::SeqCst), 1);
+
+        let echo_https = spawn_echo_server();
+        let inner_https = spawn_socks_proxy(Arc::new(AtomicUsize::new(0)));
+        let config_https = Socks5ProxyConfig::new("127.0.0.1", inner_https.port()).unwrap();
+        let outer_https_accepted = Arc::new(AtomicUsize::new(0));
+        let proxy_identity = identity(
+            include_bytes!("../../tests/fixtures/tls/localhost.pem"),
+            include_bytes!("../../tests/fixtures/tls/localhost.key.pem"),
+        );
+        let (outer_https, https_request) = spawn_tls_proxy(proxy_identity, outer_https_accepted);
+        let https_route = route_to_https_proxy(outer_https.port(), &echo_https.to_string());
+        let https_connector = OutboundConnector::with_static_route(https_route)
+            .with_tls_connector(test_tls_connector())
+            .with_specified_socks5(&config_https)
+            .unwrap();
+        let mut stream = https_connector
+            .open(&Destination::parse(&echo_https.to_string()).unwrap())
+            .expect("HTTPS outer SOCKS5 chain");
+        stream.write_all(b"https-outer").unwrap();
+        let mut https_echoed = [0u8; 11];
+        stream.read_exact(&mut https_echoed).unwrap();
+        assert_eq!(&https_echoed, b"https-outer");
+        let request = https_request
+            .recv_timeout(Duration::from_secs(3))
+            .expect("HTTPS outer CONNECT");
+        assert!(request.starts_with(&format!("CONNECT {inner_https} HTTP/1.1\r\n")));
+
+        let echo_socks = spawn_echo_server();
+        let inner_socks = spawn_socks_proxy(Arc::new(AtomicUsize::new(0)));
+        let config_socks = Socks5ProxyConfig::new("127.0.0.1", inner_socks.port()).unwrap();
+        let outer_socks_accepted = Arc::new(AtomicUsize::new(0));
+        let outer_socks = spawn_socks_proxy(outer_socks_accepted.clone());
+        let socks_route = proxy::resolve_target_with(
+            &echo_socks.to_string(),
+            &ProxyEnvironment {
+                all_proxy: Some(format!("socks5://{outer_socks}")),
+                ..ProxyEnvironment::default()
+            },
+            None,
+        )
+        .unwrap();
+        let socks_connector = OutboundConnector::with_static_route(socks_route)
+            .with_specified_socks5(&config_socks)
+            .unwrap();
+        let mut stream = socks_connector
+            .open(&Destination::parse(&echo_socks.to_string()).unwrap())
+            .expect("SOCKS5 outer SOCKS5 chain");
+        stream.write_all(b"socks-outer").unwrap();
+        let mut socks_echoed = [0u8; 11];
+        stream.read_exact(&mut socks_echoed).unwrap();
+        assert_eq!(&socks_echoed, b"socks-outer");
+
+        let context = stream.proxy_context().unwrap();
+        assert_eq!(
+            context.system_proxy,
+            Some(format!("socks5://{outer_socks}"))
+        );
+        assert_eq!(
+            context.socks5_proxy,
+            Some(format!("socks5://{inner_socks}"))
+        );
+    }
+
+    #[test]
+    fn no_proxy_bypasses_only_the_outer_route_and_keeps_the_specified_socks5() {
+        let echo = spawn_echo_server();
+        let outer_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        outer_listener.set_nonblocking(true).unwrap();
+        let inner_accepted = Arc::new(AtomicUsize::new(0));
+        let inner = spawn_socks_proxy(inner_accepted.clone());
+        let config = Socks5ProxyConfig::new("127.0.0.1", inner.port()).unwrap();
+        let route = proxy::resolve_target_with(
+            &echo.to_string(),
+            &ProxyEnvironment {
+                http_proxy: Some(format!("http://{}", outer_listener.local_addr().unwrap())),
+                no_proxy: Some("127.0.0.1".to_string()),
+                ..ProxyEnvironment::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert!(route.is_direct());
+        assert!(route.was_bypassed());
+        let connector = OutboundConnector::with_static_route(route)
+            .with_specified_socks5(&config)
+            .unwrap();
+        let mut stream = connector
+            .open(&Destination::parse(&echo.to_string()).unwrap())
+            .unwrap();
+        stream.write_all(b"bypass-outer").unwrap();
+        assert_eq!(inner_accepted.load(Ordering::SeqCst), 1);
+        assert!(outer_listener.accept().is_err());
+        assert_eq!(
+            stream.proxy_context().unwrap().source,
+            ProxySource::Specified
+        );
+        assert!(stream.route_report().system_bypassed);
+    }
+
+    #[test]
+    fn outer_failure_is_fail_closed_and_never_dials_the_specified_proxy_or_server() {
+        let echo = spawn_echo_server();
+        let dead = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_address = dead.local_addr().unwrap();
+        drop(dead);
+        let inner_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        inner_listener.set_nonblocking(true).unwrap();
+        let config =
+            Socks5ProxyConfig::new("127.0.0.1", inner_listener.local_addr().unwrap().port())
+                .unwrap();
+        let route = proxy::resolve_target_with(
+            &echo.to_string(),
+            &ProxyEnvironment {
+                http_proxy: Some(format!("http://{dead_address}")),
+                ..ProxyEnvironment::default()
+            },
+            None,
+        )
+        .unwrap();
+        let connector = OutboundConnector::with_static_route(route)
+            .with_specified_socks5(&config)
+            .unwrap();
+        assert!(
+            connector
+                .open(&Destination::parse(&echo.to_string()).unwrap())
+                .is_err()
+        );
+        assert!(inner_listener.accept().is_err());
+    }
+
+    #[test]
+    fn inner_authentication_failure_does_not_retry_the_outer_route() {
+        let echo = spawn_echo_server();
+        let outer_accepted = Arc::new(AtomicUsize::new(0));
+        let (outer_http, _request) = spawn_http_proxy(outer_accepted.clone());
+        let second_outer = TcpListener::bind("127.0.0.1:0").unwrap();
+        second_outer.set_nonblocking(true).unwrap();
+        let inner_accepted = Arc::new(AtomicUsize::new(0));
+        let (inner, _observation) = spawn_socks_proxy_requiring_auth(inner_accepted.clone(), false);
+        let config = Socks5ProxyConfig::with_auth(
+            "127.0.0.1",
+            inner.port(),
+            "synthetic-user",
+            "synthetic-password",
+        )
+        .unwrap();
+        let route = proxy::resolve_target_with(
+            &echo.to_string(),
+            &ProxyEnvironment {
+                http_proxy: Some(format!("http://{outer_http}")),
+                https_proxy: Some(format!("https://{}", second_outer.local_addr().unwrap())),
+                ..ProxyEnvironment::default()
+            },
+            None,
+        )
+        .unwrap();
+        let connector = OutboundConnector::with_static_route(route)
+            .with_tls_connector(test_tls_connector())
+            .with_specified_socks5(&config)
+            .unwrap();
+        let error = connector
+            .open(&Destination::parse(&echo.to_string()).unwrap())
+            .unwrap_err();
+        let crate::Error::Proxy(error) = error else {
+            panic!("expected specified SOCKS5 error");
+        };
+        let failure = error.failure();
+        assert_eq!(failure.kind, ProxyFailureKind::SocksAuthentication);
+        assert_eq!(failure.source, Some(ProxySource::Specified));
+        assert_eq!(failure.endpoint, Some(format!("socks5://{inner}")));
+        assert!(!format!("{error:?}").contains("synthetic-user"));
+        assert!(!failure.detail.contains("synthetic-password"));
+        assert_eq!(outer_accepted.load(Ordering::SeqCst), 1);
+        assert_eq!(inner_accepted.load(Ordering::SeqCst), 1);
+        assert!(second_outer.accept().is_err());
+    }
+
+    #[test]
+    fn specified_target_rejection_is_fail_closed_and_credential_free() {
+        let proxy = spawn_socks_proxy_rejecting(0x05);
+        let config = Socks5ProxyConfig::with_auth(
+            "127.0.0.1",
+            proxy.port(),
+            "synthetic-user",
+            "synthetic-password",
+        )
+        .unwrap();
+        let connector = OutboundConnector::with_static_route(ProxyRoute::direct())
+            .with_specified_socks5(&config)
+            .unwrap();
+        let destination = Destination::parse("server.example:443").unwrap();
+        let error = connector.open(&destination).unwrap_err();
+        let crate::Error::Proxy(error) = error else {
+            panic!("expected specified SOCKS5 error");
+        };
+        let failure = error.failure();
+        assert_eq!(failure.kind, ProxyFailureKind::SocksTargetRejected);
+        assert_eq!(failure.source, Some(ProxySource::Specified));
+        assert_eq!(failure.endpoint, Some(format!("socks5://{proxy}")));
+        assert!(!format!("{error:?}").contains("synthetic-user"));
+        assert!(!failure.detail.contains("synthetic-password"));
+    }
+
+    #[test]
+    fn outer_candidates_may_fall_back_before_the_inner_socks5_succeeds() {
+        let echo = spawn_echo_server();
+        let dead_http = TcpListener::bind("127.0.0.1:0").unwrap();
+        let dead_http_address = dead_http.local_addr().unwrap();
+        drop(dead_http);
+        let inner = spawn_socks_proxy(Arc::new(AtomicUsize::new(0)));
+        let config = Socks5ProxyConfig::new("127.0.0.1", inner.port()).unwrap();
+        let outer_accepted = Arc::new(AtomicUsize::new(0));
+        let proxy_identity = identity(
+            include_bytes!("../../tests/fixtures/tls/localhost.pem"),
+            include_bytes!("../../tests/fixtures/tls/localhost.key.pem"),
+        );
+        let (outer_https, request) = spawn_tls_proxy(proxy_identity, outer_accepted);
+        let route = proxy::resolve_target_with(
+            &echo.to_string(),
+            &ProxyEnvironment {
+                http_proxy: Some(format!("http://{dead_http_address}")),
+                https_proxy: Some(format!("https://localhost:{}", outer_https.port())),
+                ..ProxyEnvironment::default()
+            },
+            None,
+        )
+        .unwrap();
+        let connector = OutboundConnector::with_static_route(route)
+            .with_tls_connector(test_tls_connector())
+            .with_specified_socks5(&config)
+            .unwrap();
+        let mut stream = connector
+            .open(&Destination::parse(&echo.to_string()).unwrap())
+            .expect("fallback outer then inner SOCKS5");
+        stream.write_all(b"outer-fallback").unwrap();
+        let mut echoed = [0u8; 14];
+        stream.read_exact(&mut echoed).unwrap();
+        assert_eq!(&echoed, b"outer-fallback");
+        let request = request.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(request.starts_with(&format!("CONNECT {inner} HTTP/1.1\r\n")));
+        assert_eq!(
+            stream.proxy_context().unwrap().system_proxy,
+            Some(format!("https://localhost:{}", outer_https.port()))
+        );
     }
 
     #[test]
@@ -1815,7 +2589,11 @@ pub(crate) mod tests {
         let failure = error.failure();
         assert_eq!(failure.kind, ProxyFailureKind::Timeout);
         assert_eq!(failure.endpoint, Some(format!("http://{proxy_address}")));
-        assert!(started.elapsed() >= proxy::PROXY_HANDSHAKE_TIMEOUT);
+        // Windows timer granularity can report a deadline a few milliseconds
+        // early. Keep the upper bound strict so an immediate/direct failure
+        // cannot satisfy this timeout regression.
+        assert!(started.elapsed() + Duration::from_millis(250) >= proxy::PROXY_HANDSHAKE_TIMEOUT);
+        assert!(started.elapsed() < proxy::PROXY_HANDSHAKE_TIMEOUT + Duration::from_secs(5));
         assert!(target_listener.accept().is_err());
     }
 
@@ -2125,6 +2903,7 @@ pub(crate) mod tests {
         let connector = OutboundConnector {
             resolver: Arc::new(proxy::StaticProxyResolver::new(route)),
             tls: TlsSetup::Unavailable(Arc::from("system trust store unavailable")),
+            specified_socks5: None,
         };
 
         let error = connector.open(&destination).unwrap_err();

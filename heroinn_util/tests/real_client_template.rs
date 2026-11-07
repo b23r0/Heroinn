@@ -1,4 +1,9 @@
-use heroinn_util::{ConnectionInfo, HeroinnProtocol, dna::replace_connection_info_to_new_file};
+use heroinn_util::{
+    ConnectionInfo, HeroinnProtocol, Socks5ProxyConfig,
+    dna::{
+        CLIENT_CAPABILITY_MARKER, connection_stamp_offsets, replace_connection_info_to_new_file,
+    },
+};
 use std::{env, fs, path::PathBuf};
 
 #[test]
@@ -28,8 +33,29 @@ fn patches_a_real_client_template() {
         "heroinn_client_generated"
     });
 
-    let info =
-        ConnectionInfo::new(HeroinnProtocol::TCP, "example.com", "9001", "integration").unwrap();
+    let template_binary = fs::read(&template).unwrap();
+    assert_eq!(
+        template_binary
+            .windows(CLIENT_CAPABILITY_MARKER.len())
+            .filter(|window| *window == CLIENT_CAPABILITY_MARKER)
+            .count(),
+        1,
+        "client capability marker must be present exactly once"
+    );
+    assert_eq!(
+        connection_stamp_offsets(&template_binary).len(),
+        1,
+        "the structurally valid connection stamp must remain uniquely locatable"
+    );
+
+    let info = ConnectionInfo::new_with_socks5(
+        HeroinnProtocol::TCP,
+        "example.com",
+        "9001",
+        "integration",
+        Some(Socks5ProxyConfig::new("proxy.example", 1080).unwrap()),
+    )
+    .unwrap();
     let input_size = fs::metadata(&template).unwrap().len();
     replace_connection_info_to_new_file(&template, &output, info.clone()).unwrap();
 
@@ -41,6 +67,10 @@ fn patches_a_real_client_template() {
             .windows(payload.len())
             .any(|window| window == payload)
     );
+    assert!(heroinn_util::dna::client_supports_feature(
+        &binary,
+        heroinn_util::dna::CLIENT_FEATURE_SOCKS5_PROXY
+    ));
 
     #[cfg(unix)]
     {

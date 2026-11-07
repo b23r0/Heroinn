@@ -94,6 +94,9 @@ pub struct DataPlaneFailure {
     pub operation: String,
     pub source: Option<ProxySource>,
     pub endpoint: Option<String>,
+    pub system_proxy: Option<String>,
+    pub system_bypassed: bool,
+    pub socks5_proxy: Option<String>,
     pub detail: String,
 }
 
@@ -115,6 +118,15 @@ impl DataPlaneFailure {
             operation: operation.to_string(),
             source: proxy.map(|context| context.source),
             endpoint: proxy.map(|context| safe_endpoint(&context.endpoint)),
+            system_proxy: proxy
+                .and_then(|context| context.system_proxy.as_deref())
+                .map(safe_endpoint),
+            system_bypassed: proxy
+                .map(|context| context.system_bypassed)
+                .unwrap_or(false),
+            socks5_proxy: proxy
+                .and_then(|context| context.socks5_proxy.as_deref())
+                .map(safe_endpoint),
             detail: safe_detail(&error.to_string()),
         }
     }
@@ -123,13 +135,24 @@ impl DataPlaneFailure {
         let source = self.source.map(|source| source.to_string());
         let source = source.as_deref().unwrap_or("none");
         let endpoint = self.endpoint.as_deref().unwrap_or("none");
+        let system_proxy = self.system_proxy.as_deref().unwrap_or("none");
+        let socks5_proxy = self.socks5_proxy.as_deref().unwrap_or("none");
         let log_path = current_log_path()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "unavailable".to_string());
         format!(
-            "data_plane_failure category={} source={} endpoint={} operation={} \
-             detail=\"{}\" fail_closed=true log=\"{}\"",
-            self.category, source, endpoint, self.operation, self.detail, log_path
+            "data_plane_failure category={} source={} endpoint={} system_proxy={} \
+             system_bypassed={} socks5_proxy={} operation={} detail=\"{}\" fail_closed=true \
+             log=\"{}\"",
+            self.category,
+            source,
+            endpoint,
+            system_proxy,
+            self.system_bypassed,
+            socks5_proxy,
+            self.operation,
+            self.detail,
+            log_path
         )
     }
 }
@@ -716,6 +739,9 @@ mod tests {
         let proxy = ProxyContext {
             source: ProxySource::Environment,
             endpoint: "https://proxy.example:8443".to_string(),
+            system_proxy: Some("https://proxy.example:8443".to_string()),
+            system_bypassed: false,
+            socks5_proxy: Some("socks5://127.0.0.1:1080".to_string()),
         };
         let failure = DataPlaneFailure::from_error(
             "ftp_download_frame",
@@ -732,7 +758,16 @@ mod tests {
             failure.endpoint.as_deref(),
             Some("https://proxy.example:8443")
         );
+        assert_eq!(
+            failure.socks5_proxy.as_deref(),
+            Some("socks5://127.0.0.1:1080")
+        );
         assert!(failure.log_line().contains("fail_closed=true"));
+        assert!(
+            failure
+                .log_line()
+                .contains("socks5_proxy=socks5://127.0.0.1:1080")
+        );
         assert!(failure.log_line().contains("operation=ftp_download_frame"));
         assert!(!failure.detail.contains("alice"));
         assert!(!failure.detail.contains("secret"));

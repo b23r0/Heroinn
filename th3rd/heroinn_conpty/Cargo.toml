@@ -1,0 +1,32 @@
+[package]
+name = "conpty"
+version = "0.3.0"
+edition = "2021"
+publish = false
+authors = ["Maxim Zhiburt <zhiburt@gmail.com>"]
+description = "A library which provides an interface for ConPTY"
+repository = "https://github.com/zhiburt/conpty"
+homepage = "https://github.com/zhiburt/conpty"
+documentation = "https://docs.rs/conpty"
+license = "MIT"
+categories = ["os", "os::windows-apis"]
+keywords = ["win32", "ConPTY", "terminal", "shell"]
+
+[dependencies.windows]
+version = "0.29.0"
+features = [
+    "alloc",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+    "Win32_System_Pipes",
+    "Win32_System_SystemServices",
+    "Win32_System_WindowsProgramming",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[dev-dependencies]
+strip-ansi-escapes = "0.1.1"

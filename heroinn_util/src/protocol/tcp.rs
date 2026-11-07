@@ -12,7 +12,7 @@ use socket2::{SockRef, TcpKeepalive};
 use crate::error::{Error, Result};
 use crate::packet::Message;
 use crate::protocol::frame::{MAX_PACKET, read_frame, write_frame};
-use crate::protocol::outbound::{OutboundStream, ProxyContext, TransportFactory};
+use crate::protocol::outbound::{OutboundStream, ProxyContext, RouteReport, TransportFactory};
 use crate::protocol::proxy::Destination;
 use crate::protocol::{MessageHandler, TUNNEL_FLAG};
 use crate::{HeroinnProtocol, cur_timestamp_secs};
@@ -28,6 +28,7 @@ pub struct TcpServer {
 pub struct TcpConnection {
     s: Option<OutboundStream>,
     proxy_context: Option<ProxyContext>,
+    route_report: RouteReport,
     closed: Arc<AtomicBool>,
 }
 
@@ -36,6 +37,7 @@ impl Clone for TcpConnection {
         Self {
             s: self.s.as_ref().map(|stream| stream.try_clone().unwrap()),
             proxy_context: self.proxy_context.clone(),
+            route_report: self.route_report.clone(),
             closed: self.closed.clone(),
         }
     }
@@ -235,6 +237,7 @@ impl TcpConnection {
         Ok(Self {
             s: Some(OutboundStream::from_tcp(TcpStream::connect(address)?)?),
             proxy_context: None,
+            route_report: RouteReport::default(),
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -249,9 +252,11 @@ impl TcpConnection {
         let destination = Destination::parse(address)?;
         let stream = factory.open(&destination)?;
         let proxy_context = stream.proxy_context().cloned();
+        let route_report = stream.route_report().clone();
         Ok(Self {
             s: Some(stream),
             proxy_context,
+            route_report,
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -271,6 +276,7 @@ impl TcpConnection {
         Ok(Self {
             s: Some(s),
             proxy_context: None,
+            route_report: RouteReport::default(),
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -290,11 +296,13 @@ impl TcpConnection {
         log::info!("start tunnel [{}] [{}]", remote_addr, server_local_port);
         let mut s = factory.open(&destination)?;
         let proxy_context = s.proxy_context().cloned();
+        let route_report = s.route_report().clone();
         s.write_all(&TUNNEL_FLAG)?;
         s.write_all(&server_local_port.to_be_bytes())?;
         Ok(Self {
             s: Some(s),
             proxy_context,
+            route_report,
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -324,6 +332,7 @@ impl TcpConnection {
                 Self {
                     s: Some(OutboundStream::from_tcp(s)?),
                     proxy_context: None,
+                    route_report: RouteReport::default(),
                     closed: Arc::new(AtomicBool::new(false)),
                 },
                 addr,
@@ -352,6 +361,10 @@ impl TcpConnection {
 
     pub fn proxy_context(&self) -> Option<&ProxyContext> {
         self.proxy_context.as_ref()
+    }
+
+    pub fn route_report(&self) -> &RouteReport {
+        &self.route_report
     }
 
     pub fn remote_closed(&self) -> Result<bool> {

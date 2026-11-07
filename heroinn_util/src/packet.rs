@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
 use crate::error::{Error, Result};
-use crate::{session::SessionPacket, HeroinnProtocol};
+use crate::{HeroinnProtocol, session::SessionPacket};
 
 /// Envelope shared by every message: a client id and an opaque JSON payload.
 #[derive(Serialize, Deserialize, Debug)]
@@ -30,13 +30,26 @@ impl TunnelRequest {
 }
 
 /// Host metadata reported by a client when it first connects.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProxyDisplay {
+    pub protocol: String,
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// Host metadata reported by a client when it first connects.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct HostInfo {
     pub ip: String,
     pub host_name: String,
     pub os: String,
     pub whoami: String,
     pub remark: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_proxy: Option<ProxyDisplay>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socks5_proxy: Option<ProxyDisplay>,
 }
 
 /// Periodic traffic counters reported by a client.
@@ -159,5 +172,57 @@ mod tests {
         let msg = Message::new(peer, HeroinnProtocol::TCP, &buf).unwrap();
         assert_eq!(msg.clientid(), "client-1");
         assert_eq!(msg.parse_transfer_rate().unwrap(), setting);
+    }
+
+    #[test]
+    fn hostinfo_old_packets_default_new_proxy_fields() {
+        let info: HostInfo = serde_json::from_str(
+            r#"{"ip":"127.0.0.1","host_name":"host","os":"linux","whoami":"user","remark":"old"}"#,
+        )
+        .unwrap();
+        assert_eq!(info.system_proxy, None);
+        assert_eq!(info.socks5_proxy, None);
+    }
+
+    #[test]
+    fn hostinfo_proxy_fields_round_trip_without_credentials() {
+        let info = HostInfo {
+            ip: "127.0.0.1".to_string(),
+            host_name: "host".to_string(),
+            os: "linux".to_string(),
+            whoami: "user".to_string(),
+            remark: "new".to_string(),
+            system_proxy: Some(ProxyDisplay {
+                protocol: "HTTPS".to_string(),
+                address: "proxy.example:8443".to_string(),
+                source: Some("system".to_string()),
+            }),
+            socks5_proxy: Some(ProxyDisplay {
+                protocol: "SOCKS5".to_string(),
+                address: "[::1]:1080".to_string(),
+                source: Some("specified".to_string()),
+            }),
+        };
+        let payload = serde_json::to_vec(&info).unwrap();
+        let parsed: HostInfo = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(parsed, info);
+        let text = String::from_utf8(payload.clone()).unwrap();
+        assert!(!text.contains("password"));
+        assert!(!text.contains("username"));
+
+        #[derive(Deserialize)]
+        struct LegacyHostInfo {
+            ip: String,
+            host_name: String,
+            os: String,
+            whoami: String,
+            remark: String,
+        }
+        let legacy: LegacyHostInfo = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(legacy.ip, "127.0.0.1");
+        assert_eq!(legacy.host_name, "host");
+        assert_eq!(legacy.os, "linux");
+        assert_eq!(legacy.whoami, "user");
+        assert_eq!(legacy.remark, "new");
     }
 }

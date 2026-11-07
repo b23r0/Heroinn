@@ -2,19 +2,20 @@
 //! and for reverse tunnels.
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use websocket::OwnedMessage;
 use websocket::stream::sync::ReadWritePair;
+use websocket::sync::server::upgrade::IntoWs;
 use websocket::sync::{Reader, Writer};
 
 use crate::HeroinnProtocol;
 use crate::error::{Error, Result};
 use crate::packet::Message;
 use crate::protocol::outbound::{
-    OutboundConnector, OutboundReader, OutboundWriter, ProxyContext, TransportFactory,
+    OutboundConnector, OutboundReader, OutboundWriter, ProxyContext, RouteReport, TransportFactory,
 };
 use crate::protocol::proxy::{Destination, ProxyRoute};
 use crate::protocol::{MessageHandler, TUNNEL_FLAG};
@@ -35,20 +36,21 @@ pub struct WSConnection {
     close_reader: OutboundReader,
     local_addr: SocketAddr,
     proxy_context: Option<ProxyContext>,
+    route_report: RouteReport,
     closed: Arc<AtomicBool>,
 }
 
 impl WSServer {
     /// Bind `address` and pass every decoded message to `on_message`.
     pub fn new(address: &str, on_message: MessageHandler) -> Result<Self> {
-        let mut server = websocket::sync::Server::bind(address)?;
-        server.set_nonblocking(true).unwrap();
+        let server = TcpListener::bind(address)?;
+        server.set_nonblocking(true)?;
 
         let connections: Arc<Mutex<HashMap<SocketAddr, Writer<TcpStream>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
 
-        let local_addr = server.local_addr().unwrap();
+        let local_addr = server.local_addr()?;
 
         let connections_1 = connections.clone();
         let closed_1 = closed.clone();
@@ -56,20 +58,41 @@ impl WSServer {
             .name(format!("ws listener : {}", local_addr))
             .spawn(move || {
                 loop {
-                    let client = match server.accept() {
-                        Ok(p) => match p.accept() {
-                            Ok(c) => c,
-                            Err(e) => {
-                                log::warn!("ws handshake failed : {:?}", e);
-                                continue;
-                            }
-                        },
-                        Err(_) => {
+                    let (stream, _) = match server.accept() {
+                        Ok(connection) => connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             if closed_1.load(Ordering::Relaxed) {
                                 break;
                             }
 
                             std::thread::sleep(std::time::Duration::from_millis(200));
+                            continue;
+                        }
+                        Err(error) => {
+                            log::warn!("ws accept failed : {}", error);
+                            continue;
+                        }
+                    };
+
+                    // On Windows an accepted socket can inherit the listener's
+                    // nonblocking flag. The upgrade reader must block until the
+                    // HTTP request has arrived instead of rejecting a normal
+                    // client that has not sent its headers yet.
+                    if let Err(error) = stream.set_nonblocking(false) {
+                        log::warn!("ws accepted socket setup failed : {}", error);
+                        continue;
+                    }
+                    let upgrade = match stream.into_ws() {
+                        Ok(upgrade) => upgrade,
+                        Err((_stream, _request, _buffer, error)) => {
+                            log::warn!("ws request read failed : {:?}", error);
+                            continue;
+                        }
+                    };
+                    let client = match upgrade.accept() {
+                        Ok(client) => client,
+                        Err((_stream, error)) => {
+                            log::warn!("ws handshake failed : {}", error);
                             continue;
                         }
                     };
@@ -285,6 +308,7 @@ impl WSConnection {
         let stream = connector.open(&destination)?;
         let local_addr = stream.local_addr()?;
         let proxy_context = stream.proxy_context().cloned();
+        let route_report = stream.route_report().clone();
         let close_reader = stream.close_reader();
         let (reader, writer) = stream
             .split()
@@ -303,6 +327,7 @@ impl WSConnection {
             close_reader,
             local_addr,
             proxy_context,
+            route_report,
         ))
     }
 
@@ -312,6 +337,7 @@ impl WSConnection {
         close_reader: OutboundReader,
         local_addr: SocketAddr,
         proxy_context: Option<ProxyContext>,
+        route_report: RouteReport,
     ) -> Self {
         Self {
             reader: Some(Arc::new(Mutex::new(reader))),
@@ -320,6 +346,7 @@ impl WSConnection {
             closed: Arc::new(AtomicBool::new(false)),
             local_addr,
             proxy_context,
+            route_report,
         }
     }
 
@@ -416,6 +443,10 @@ impl WSConnection {
         self.proxy_context.as_ref()
     }
 
+    pub fn route_report(&self) -> &RouteReport {
+        &self.route_report
+    }
+
     pub fn remote_closed(&self) -> Result<bool> {
         self.close_reader.remote_closed().map_err(Error::Io)
     }
@@ -462,6 +493,7 @@ impl Clone for WSConnection {
             closed: self.closed.clone(),
             local_addr: self.local_addr,
             proxy_context: self.proxy_context.clone(),
+            route_report: self.route_report.clone(),
         }
     }
 }

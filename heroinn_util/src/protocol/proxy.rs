@@ -15,6 +15,7 @@ use native_tls::{HandshakeError, TlsConnector, TlsStream};
 use thiserror::Error;
 use url::{Host, Url};
 
+use crate::Socks5ProxyConfig;
 use crate::error::Result;
 
 pub(crate) const PROXY_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -126,6 +127,22 @@ impl ProxyFailureKind {
 pub(crate) enum ProxyTransport {
     Plain(TcpStream),
     Tls(Box<TlsStream<TcpStream>>),
+}
+
+impl ProxyTransport {
+    pub(crate) fn clear_handshake_timeouts(&mut self) -> Result<()> {
+        let stream = match self {
+            Self::Plain(stream) => stream,
+            Self::Tls(stream) => stream.get_ref(),
+        };
+        stream
+            .set_read_timeout(None)
+            .and_then(|_| stream.set_write_timeout(None))
+            .map_err(|error| {
+                ProxyError::Handshake(format!("failed to clear proxy handshake timeout: {error}"))
+                    .into()
+            })
+    }
 }
 
 /// A successfully negotiated proxy transport and its credential-free identity.
@@ -304,6 +321,20 @@ impl fmt::Debug for ProxyEndpoint {
 }
 
 impl ProxyEndpoint {
+    pub(crate) fn from_socks5_config(config: &Socks5ProxyConfig) -> Result<Self> {
+        config.validate()?;
+        let credentials = config.auth.as_ref().map(|auth| ProxyCredentials {
+            username: auth.username.as_bytes().to_vec(),
+            password: auth.password.as_bytes().to_vec(),
+        });
+        Ok(Self {
+            kind: ProxyKind::Socks5,
+            host: config.host.clone(),
+            port: config.port,
+            credentials,
+        })
+    }
+
     pub fn kind(&self) -> ProxyKind {
         self.kind
     }
@@ -315,6 +346,14 @@ impl ProxyEndpoint {
             self.host.clone()
         };
         format!("{}://{}:{}", self.kind.scheme(), host, self.port)
+    }
+
+    pub(crate) fn authority(&self) -> String {
+        if self.host.parse::<Ipv6Addr>().is_ok() {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
     }
 
     fn open(&self) -> Result<TcpStream> {
@@ -352,7 +391,7 @@ impl ProxyEndpoint {
         }
     }
 
-    fn connect(
+    pub(crate) fn connect(
         &self,
         target: &Target,
         tls: std::result::Result<&TlsConnector, &str>,
@@ -382,6 +421,7 @@ impl ProxyEndpoint {
 pub enum ProxySource {
     Environment,
     System,
+    Specified,
 }
 
 impl fmt::Display for ProxySource {
@@ -389,6 +429,7 @@ impl fmt::Display for ProxySource {
         formatter.write_str(match self {
             Self::Environment => "environment",
             Self::System => "system",
+            Self::Specified => "specified",
         })
     }
 }
@@ -398,6 +439,7 @@ impl fmt::Display for ProxySource {
 pub struct ProxyRoute {
     source: Option<ProxySource>,
     candidates: Vec<ProxyEndpoint>,
+    bypassed: bool,
 }
 
 impl fmt::Debug for ProxyRoute {
@@ -405,6 +447,7 @@ impl fmt::Debug for ProxyRoute {
         f.debug_struct("ProxyRoute")
             .field("source", &self.source)
             .field("candidates", &self.candidates)
+            .field("bypassed", &self.bypassed)
             .finish()
     }
 }
@@ -414,6 +457,15 @@ impl ProxyRoute {
         Self {
             source: None,
             candidates: Vec::new(),
+            bypassed: false,
+        }
+    }
+
+    pub fn bypassed(source: ProxySource) -> Self {
+        Self {
+            source: Some(source),
+            candidates: Vec::new(),
+            bypassed: true,
         }
     }
 
@@ -425,6 +477,7 @@ impl ProxyRoute {
         Self {
             source: Some(source),
             candidates,
+            bypassed: false,
         }
     }
 
@@ -434,6 +487,10 @@ impl ProxyRoute {
 
     pub fn source(&self) -> Option<ProxySource> {
         self.source
+    }
+
+    pub fn was_bypassed(&self) -> bool {
+        self.bypassed
     }
 
     pub fn candidates(&self) -> &[ProxyEndpoint] {
@@ -699,12 +756,13 @@ pub(crate) fn resolve_target_with(
     }
 
     if BypassRules::parse(&bypass).matches(&target) {
-        return Ok(ProxyRoute::direct());
+        return Ok(ProxyRoute::bypassed(source));
     }
 
     Ok(ProxyRoute {
         source: Some(source),
         candidates,
+        bypassed: false,
     })
 }
 
@@ -1016,7 +1074,11 @@ where
     }
 }
 
-fn socks5_connect(stream: &mut TcpStream, proxy: &ProxyEndpoint, target: &Target) -> Result<()> {
+pub(crate) fn socks5_connect<S: Read + Write>(
+    stream: &mut S,
+    proxy: &ProxyEndpoint,
+    target: &Target,
+) -> Result<()> {
     let methods: &[u8] = if proxy.credentials.is_some() {
         &[0x00, 0x02]
     } else {
@@ -1129,14 +1191,14 @@ fn append_socks_address(buffer: &mut Vec<u8>, host: &str) -> Result<()> {
     Ok(())
 }
 
-fn write_all(stream: &mut TcpStream, bytes: &[u8]) -> Result<()> {
+fn write_all<S: Write>(stream: &mut S, bytes: &[u8]) -> Result<()> {
     stream
         .write_all(bytes)
         .and_then(|_| stream.flush())
         .map_err(|e| map_handshake_io("write", e))
 }
 
-fn read_exact(stream: &mut TcpStream, bytes: &mut [u8]) -> Result<()> {
+fn read_exact<S: Read>(stream: &mut S, bytes: &mut [u8]) -> Result<()> {
     stream
         .read_exact(bytes)
         .map_err(|e| map_handshake_io("read", e))

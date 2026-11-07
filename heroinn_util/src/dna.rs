@@ -10,6 +10,17 @@ use std::path::{Path, PathBuf};
 /// Magic marker that precedes a connection stamp in a built client binary.
 pub const CONNECTION_INFO_FLAG: [u8; 8] = [0xff, 0xfe, 0xf1, 0xa1, 0xff, 0xfe, 0xf1, 0xa1];
 
+/// Magic marker for client capabilities that do not fit inside the fixed DNA layout.
+pub const CLIENT_CAPABILITY_FLAG: [u8; 8] = *b"HRNNCAP1";
+/// Current capability record version.
+pub const CLIENT_CAPABILITY_VERSION: u16 = 1;
+/// Feature bit: the client parses and uses `ConnectionInfo::socks5_proxy`.
+pub const CLIENT_FEATURE_SOCKS5_PROXY: u32 = 1;
+/// Complete, versioned capability record embedded in every current client template.
+pub const CLIENT_CAPABILITY_MARKER: [u8; 16] = [
+    b'H', b'R', b'N', b'N', b'C', b'A', b'P', b'1', 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x5a, 0xa5,
+];
+
 /// Copy the client template to `new_path`, replacing its connection stamp.
 ///
 /// Exactly one structurally valid stamp must be present. The destination file
@@ -30,6 +41,15 @@ pub fn replace_connection_info_to_new_file(
 
     let metadata = fs::metadata(source)?;
     let mut binary = fs::read(source)?;
+    if new_info.socks5_proxy.is_some()
+        && !client_supports_feature(&binary, CLIENT_FEATURE_SOCKS5_PROXY)
+    {
+        return Err(Error::Other(
+            "client template does not advertise SOCKS5 proxy support; refusing to create a \
+             client that could silently ignore the proxy setting"
+                .to_string(),
+        ));
+    }
     let stamp = SlaveDNA::new(&new_info.serialize()?)?.serialize();
     let offsets = connection_stamp_offsets(&binary);
 
@@ -63,6 +83,18 @@ pub fn replace_connection_info_to_new_file(
     Ok(())
 }
 
+/// Whether a template contains a current capability record with `feature` enabled.
+pub fn client_supports_feature(binary: &[u8], feature: u32) -> bool {
+    binary
+        .windows(CLIENT_CAPABILITY_MARKER.len())
+        .filter(|window| window[..CLIENT_CAPABILITY_FLAG.len()] == CLIENT_CAPABILITY_FLAG)
+        .any(|window| {
+            let version = u16::from_be_bytes([window[8], window[9]]);
+            let features = u32::from_be_bytes(window[10..14].try_into().unwrap());
+            version == CLIENT_CAPABILITY_VERSION && features & feature != 0
+        })
+}
+
 /// Find a client template in the given directories.
 ///
 /// Directory order takes precedence over file-name order: all names are tested
@@ -93,7 +125,12 @@ pub fn find_client_template(
     )))
 }
 
-fn connection_stamp_offsets(binary: &[u8]) -> Vec<usize> {
+/// Locate structurally valid connection stamps embedded in a client image.
+///
+/// A raw flag match inside executable code is not necessarily a stamp. Every
+/// candidate must also contain a bounded payload length followed by the
+/// zero-filled fixed DNA region, which is the invariant used by the generator.
+pub fn connection_stamp_offsets(binary: &[u8]) -> Vec<usize> {
     let mut offsets = Vec::new();
     let Some(last_start) = binary.len().checked_sub(CONNECTION_INFO_FLAG.len()) else {
         return offsets;
@@ -160,6 +197,14 @@ mod tests {
         binary
     }
 
+    fn capable_template(prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
+        let mut binary = prefix.to_vec();
+        binary.extend(CLIENT_CAPABILITY_MARKER);
+        binary.extend(SlaveDNA::new(&[]).unwrap().serialize());
+        binary.extend_from_slice(suffix);
+        binary
+    }
+
     #[test]
     fn replaces_stamp_and_preserves_other_bytes() {
         let dir = TestDir::new();
@@ -216,6 +261,16 @@ mod tests {
     }
 
     #[test]
+    fn ignores_incidental_flag_bytes_that_are_not_valid_stamps() {
+        let mut binary = CONNECTION_INFO_FLAG.to_vec();
+        binary.extend_from_slice(b"executable code bytes");
+        let stamp_offset = binary.len();
+        binary.extend(SlaveDNA::new(b"{}").unwrap().serialize());
+
+        assert_eq!(connection_stamp_offsets(&binary), vec![stamp_offset]);
+    }
+
+    #[test]
     fn rejects_ambiguous_templates() {
         let dir = TestDir::new();
         let source = dir.0.join("template");
@@ -245,5 +300,43 @@ mod tests {
         .unwrap();
 
         assert_eq!(found, first.0.join("heroinn_client"));
+    }
+
+    #[test]
+    fn socks5_generation_requires_a_capability_marker() {
+        let dir = TestDir::new();
+        let old_source = dir.0.join("old-template");
+        let capable_source = dir.0.join("capable-template");
+        let old_output = dir.0.join("old-client");
+        let capable_output = dir.0.join("capable-client");
+        fs::write(&old_source, template(b"old", b"")).unwrap();
+        fs::write(&capable_source, capable_template(b"new", b"")).unwrap();
+
+        let info = ConnectionInfo::new_with_socks5(
+            HeroinnProtocol::TCP,
+            "server.example",
+            "9001",
+            "",
+            Some(crate::Socks5ProxyConfig::new("proxy.example", 1080).unwrap()),
+        )
+        .unwrap();
+        let error = replace_connection_info_to_new_file(&old_source, &old_output, info.clone())
+            .unwrap_err();
+        assert!(error.to_string().contains("does not advertise SOCKS5"));
+        assert!(!old_output.exists());
+
+        replace_connection_info_to_new_file(&capable_source, &capable_output, info).unwrap();
+        let binary = fs::read(capable_output).unwrap();
+        assert!(client_supports_feature(
+            &binary,
+            CLIENT_FEATURE_SOCKS5_PROXY
+        ));
+        assert_eq!(
+            binary
+                .windows(CLIENT_CAPABILITY_MARKER.len())
+                .filter(|window| *window == CLIENT_CAPABILITY_MARKER)
+                .count(),
+            1
+        );
     }
 }

@@ -1,0 +1,21 @@
+Source Git: https://github.com/b23r0/conpty.git
+Source commit: 6388bb3313f24d9657e4c2333ed09029c96ccd27
+Historical upstream: https://github.com/zhiburt/conpty
+Package snapshot: conpty 0.3.0 (edition 2021)
+
+The five src/*.rs files below are byte-identical to the source commit:
+b6f99230a10e9abc0fe89bef56b324097773b14194027f73d9eb63b851a8276e  src/console.rs
+4d8eeac3df6938a03a5885d6c913b275e203b2a5d6ad8b617fef7f50e4ddbe5f  src/error.rs
+22923d0e73c51742176b017fe909ccabedb74ac85508a6caf8e19cbcc48a3773  src/io.rs
+5fd28582c3d0b5022e873522c6ac2f830e193902d9e676325704e7aab9d14262  src/lib.rs
+d8717dfdfab21d64747372c2a0fd28652bc3ddfe06766dc1b96bf749d8ea9965  src/util.rs
+
+Additional preserved upstream files:
+upstream_sha256=72de77d0dd43ef7e1826997bbd3f75f25406bc230fd09097f3bd6100de844389
+local_sha256=d911f9b559b7a9ce42573a7813531e1b2339f88e0f47cdc6128f30287861e50a
+Cargo.toml (local changes: publish = false; remove the omitted readme reference)
+49ad3fe9bc9d4f0798a481e1c73ac833c52b4525c72fb2c4b0cd1a510e88a177  LICENSE
+
+The local Cargo.toml changes set publish = false and remove the readme field;
+package name, version, edition, authors, license, dependencies, and public API
+are unchanged. The upstream README is not copied into the local crate.

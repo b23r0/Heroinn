@@ -12,6 +12,7 @@ members = [
     "th3rd/heroinn_shell/alacritty_terminal",
     "th3rd/heroinn_shell/alacritty_config_derive",
 ]
+exclude = ["th3rd/heroinn_conpty"]
 
 [workspace.package]
 version = "0.1.0"
