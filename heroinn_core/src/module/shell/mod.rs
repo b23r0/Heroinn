@@ -47,8 +47,10 @@ impl ServerSession for ShellServer {
 
         let driver_path = resolve_shell_path(OsStr::new(driver))
             .map_err(|e| heroinn_util::Error::Other(e.to_string()))?;
-        let term = TermInstance::new(&driver_path, peer_addr)
-            .map_err(|e| heroinn_util::Error::Other(e.to_string()))?;
+        let term = TermInstance::new(&driver_path, peer_addr).map_err(|e| {
+            log::error!("failed to launch heroinn_shell: {e}");
+            heroinn_util::Error::Other(e.to_string())
+        })?;
 
         let term_1 = term.try_clone().map_err(|e| {
             heroinn_util::Error::Other(format!("clone shell wait socket failed: {e}"))

@@ -6,7 +6,7 @@
 //! determine what to do when a non-modifier key is pressed.
 
 use std::borrow::Cow;
-use std::cmp::{max, min, Ordering};
+use std::cmp::{Ordering, max, min};
 use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -1104,6 +1104,62 @@ mod tests {
         fn scheduler_mut(&mut self) -> &mut Scheduler {
             unimplemented!();
         }
+    }
+
+    fn viewport_text(term: &Term<MockEventProxy>) -> String {
+        let mut text = String::new();
+        for indexed in term.renderable_content().display_iter {
+            let character = indexed.cell.c;
+            text.push(if character == '\0' { ' ' } else { character });
+            if indexed.point.column == term.last_column() {
+                text.push('\n');
+            }
+        }
+        text
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn shift_page_up_scrolls_the_rendered_terminal_history() {
+        let cfg = UiConfig::default();
+        let size = SizeInfo::new(800.0, 50.0, 10.0, 10.0, 0., 0., false);
+        let mut terminal = Term::new(&cfg.terminal_config, &size, MockEventProxy);
+        let mut parser = alacritty_terminal::ansi::Processor::new();
+        for line in 0..200 {
+            for byte in format!("HISTORY_LINE_{line:03}\r\n").bytes() {
+                parser.advance(&mut terminal, byte);
+            }
+        }
+
+        let bottom = viewport_text(&terminal);
+        let mut clipboard = Clipboard::new_nop();
+        let mut mouse = Mouse::default();
+        let mut message_buffer = MessageBuffer::default();
+        let context = ActionContext {
+            terminal: &mut terminal,
+            mouse: &mut mouse,
+            size_info: &size,
+            clipboard: &mut clipboard,
+            received_count: 0,
+            suppress_chars: false,
+            modifiers: ModifiersState::SHIFT,
+            message_buffer: &mut message_buffer,
+            config: &cfg,
+        };
+        let mut processor = Processor::new(context);
+        let page_up = KeyboardInput {
+            scancode: 0,
+            state: ElementState::Pressed,
+            virtual_keycode: Some(VirtualKeyCode::PageUp),
+            modifiers: ModifiersState::SHIFT,
+        };
+
+        processor.process_key_bindings(page_up);
+
+        assert!(processor.ctx.terminal.grid().display_offset() > 0);
+        let scrolled = viewport_text(processor.ctx.terminal);
+        assert_ne!(scrolled, bottom);
+        assert!(scrolled.contains("HISTORY_LINE_"));
     }
 
     macro_rules! test_clickstate {

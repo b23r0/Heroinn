@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, RwLock,
-        mpsc::{Sender, channel},
+        mpsc::{Sender, TryRecvError, channel},
     },
 };
 
@@ -52,6 +52,20 @@ fn can_enter(info: &FileInfo) -> bool {
     info.typ == "FOLDER" || info.typ == "SSD" || info.typ == "HDD" || info.typ.ends_with(" Drive")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RemoteRefreshKind {
+    Disk,
+    Folder,
+}
+
+fn remote_refresh_kind(path: &str) -> RemoteRefreshKind {
+    if path == FtpApp::ROOT_FLAG {
+        RemoteRefreshKind::Disk
+    } else {
+        RemoteRefreshKind::Folder
+    }
+}
+
 /// Decode an embedded `.ico` resource into a GPU-resident egui texture.
 fn load_icon(ctx: &egui::Context, name: &str, bytes: &[u8]) -> egui::TextureHandle {
     let img = image::load_from_memory(bytes)
@@ -81,6 +95,10 @@ struct FtpApp {
     remote_path: String,
     local_disk_info: Vec<FileInfo>,
     remote_disk_info: Vec<FileInfo>,
+    remote_loading: bool,
+    remote_error: Option<String>,
+    remote_load: Option<std::sync::mpsc::Receiver<Result<Vec<FileInfo>, String>>>,
+    local_error: Option<String>,
     sender: Sender<FTPPacket>,
     drive_image: Option<egui::TextureHandle>,
     folder_image: Option<egui::TextureHandle>,
@@ -93,25 +111,41 @@ impl FtpApp {
     const ROOT_FLAG: &'static str = "[DISK]";
 
     pub fn new(sender: Sender<FTPPacket>) -> Self {
-        let remote_disk_info = match get_remote_disk_info(&sender) {
-            Ok(p) => p,
-            Err(e) => {
-                msgbox::error(
-                    &"heroinn FTP".to_string(),
-                    &format!("get disk info error : {}", e),
-                );
-                std::process::exit(0);
-            }
+        let (local_disk_info, local_error) = match get_local_disk_info() {
+            Ok(entries) => (entries, None),
+            Err(error) => (
+                Vec::new(),
+                Some(format!("Local disk discovery failed: {error}")),
+            ),
         };
 
-        let local_disk_info = get_local_disk_info().unwrap();
+        let (load_sender, load_receiver) = channel();
+        let remote_sender = sender.clone();
+        let (remote_loading, remote_error, remote_load) = match std::thread::Builder::new()
+            .name("ftp initial remote discovery".to_string())
+            .spawn(move || {
+                let result =
+                    get_remote_disk_info(&remote_sender).map_err(|error| error.to_string());
+                let _ = load_sender.send(result);
+            }) {
+            Ok(_) => (true, None, Some(load_receiver)),
+            Err(error) => (
+                false,
+                Some(format!("Remote discovery failed to start: {error}")),
+                None,
+            ),
+        };
 
         Self {
             initilized: false,
             switch: SwitchDock::List,
             local_path: String::from(FtpApp::ROOT_FLAG),
             remote_path: String::from(FtpApp::ROOT_FLAG),
-            remote_disk_info,
+            remote_disk_info: Vec::new(),
+            remote_loading,
+            remote_error,
+            remote_load,
+            local_error,
             sender,
             local_disk_info,
             drive_image: None,
@@ -122,11 +156,54 @@ impl FtpApp {
             remote_folder_strace: vec![],
         }
     }
+
+    fn poll_remote_load(&mut self) {
+        let result = self
+            .remote_load
+            .as_ref()
+            .map(|receiver| receiver.try_recv());
+        match result {
+            Some(Ok(result)) => {
+                self.remote_load = None;
+                self.remote_loading = false;
+                Self::apply_remote_load_result(
+                    &mut self.remote_disk_info,
+                    &mut self.remote_error,
+                    result,
+                );
+            }
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.remote_load = None;
+                self.remote_loading = false;
+                self.remote_error =
+                    Some("Remote discovery worker stopped without a result".to_string());
+            }
+            Some(Err(TryRecvError::Empty)) | None => {}
+        }
+    }
+
+    fn apply_remote_load_result(
+        entries: &mut Vec<FileInfo>,
+        error: &mut Option<String>,
+        result: Result<Vec<FileInfo>, String>,
+    ) {
+        match result {
+            Ok(loaded) => {
+                *entries = loaded;
+                *error = None;
+            }
+            Err(message) => {
+                *entries = Vec::new();
+                *error = Some(format!("Remote files unavailable: {message}"));
+            }
+        }
+    }
 }
 
 impl App for FtpApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.poll_remote_load();
 
         if !self.initilized {
             ctx.set_theme(egui::Theme::Dark);
@@ -178,14 +255,16 @@ impl App for FtpApp {
                         .size(Size::remainder())
                         .vertical(|mut strip| {
                             strip.strip(|builder| {
-                                builder.sizes(Size::remainder(), 2).horizontal(|mut strip| {
-                                    strip.cell(|ui| {
-                                        self.render_file_table("1", ui, FSType::Local);
-                                    });
-                                    strip.cell(|ui| {
-                                        self.render_file_table("2", ui, FSType::Remote);
-                                    });
-                                });
+                                builder.sizes(Size::remainder(), 2).clip(true).horizontal(
+                                    |mut strip| {
+                                        strip.cell(|ui| {
+                                            self.render_file_table("1", ui, FSType::Local);
+                                        });
+                                        strip.cell(|ui| {
+                                            self.render_file_table("2", ui, FSType::Remote);
+                                        });
+                                    },
+                                );
                             });
                         });
                 }
@@ -217,12 +296,20 @@ impl App for FtpApp {
 
 impl FtpApp {
     fn render_file_table(&mut self, id: &str, ui: &mut egui::Ui, typ: FSType) {
-        egui::CentralPanel::default()
-            .show(ui, |ui| {
-
+        ui.push_id(id, |ui| {
             ui.vertical_centered(|ui| {
-                ui.heading(format!("{:?}" ,typ));
+                ui.heading(format!("{:?}", typ));
             });
+            if typ == FSType::Remote {
+                if self.remote_loading {
+                    ui.label("Loading remote files...");
+                }
+                if let Some(error) = &self.remote_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+            } else if let Some(error) = &self.local_error {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
             ui.separator();
 
             StripBuilder::new(ui)
@@ -390,6 +477,7 @@ impl FtpApp {
 
     fn file_table(&mut self, id: &str, ui: &mut egui::Ui, typ: FSType) {
         ui.push_id(id, |ui| {
+            ui.set_clip_rect(ui.max_rect());
             let folder_image = self.folder_image.clone();
             let drive_image = self.drive_image.clone();
             let file_image = self.file_image.clone();
@@ -781,7 +869,16 @@ impl FtpApp {
     }
     fn refresh_local_path(local_path: &String) -> Vec<FileInfo> {
         if local_path == FtpApp::ROOT_FLAG {
-            return get_local_disk_info().unwrap();
+            return match get_local_disk_info() {
+                Ok(entries) => entries,
+                Err(error) => {
+                    msgbox::error(
+                        &"heroinn FTP".to_string(),
+                        &format!("get disk info error : {}", error),
+                    );
+                    vec![]
+                }
+            };
         }
 
         match get_local_folder_info(local_path) {
@@ -795,9 +892,9 @@ impl FtpApp {
             }
         }
     }
-    fn refresh_remote_path(remote_path: &String, sender: &Sender<FTPPacket>) -> Vec<FileInfo> {
-        if remote_path == FtpApp::ROOT_FLAG {
-            match get_remote_disk_info(sender) {
+    fn refresh_remote_path(remote_path: &str, sender: &Sender<FTPPacket>) -> Vec<FileInfo> {
+        match remote_refresh_kind(remote_path) {
+            RemoteRefreshKind::Disk => match get_remote_disk_info(sender) {
                 Ok(p) => p,
                 Err(e) => {
                     msgbox::error(
@@ -806,18 +903,17 @@ impl FtpApp {
                     );
                     vec![]
                 }
-            };
-        }
-
-        match get_remote_folder_info(sender, remote_path) {
-            Ok(p) => p,
-            Err(e) => {
-                msgbox::error(
-                    &"heroinn FTP".to_string(),
-                    &format!("get remote folder info failed : {}", e),
-                );
-                vec![]
-            }
+            },
+            RemoteRefreshKind::Folder => match get_remote_folder_info(sender, remote_path) {
+                Ok(p) => p,
+                Err(e) => {
+                    msgbox::error(
+                        &"heroinn FTP".to_string(),
+                        &format!("get remote folder info failed : {}", e),
+                    );
+                    vec![]
+                }
+            },
         }
     }
 }
@@ -905,7 +1001,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::can_enter;
+    use super::{FtpApp, RemoteRefreshKind, can_enter, remote_refresh_kind};
     use heroinn_util::ftp::FileInfo;
 
     fn file_info(typ: &str) -> FileInfo {
@@ -927,5 +1023,34 @@ mod tests {
     fn regular_files_cannot_be_entered() {
         assert!(!can_enter(&file_info("FILE")));
         assert!(!can_enter(&file_info("SYMLINK")));
+    }
+
+    #[test]
+    fn root_refresh_is_a_disk_request_and_not_a_folder_fallback() {
+        assert_eq!(
+            remote_refresh_kind(FtpApp::ROOT_FLAG),
+            RemoteRefreshKind::Disk
+        );
+        assert_eq!(remote_refresh_kind("/home/user"), RemoteRefreshKind::Folder);
+    }
+
+    #[test]
+    fn remote_load_state_distinguishes_loading_success_and_failure() {
+        let mut entries = Vec::new();
+        let mut error = None;
+        FtpApp::apply_remote_load_result(&mut entries, &mut error, Ok(vec![file_info("FOLDER")]));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(error, None);
+
+        FtpApp::apply_remote_load_result(
+            &mut entries,
+            &mut error,
+            Err("connection timed out".to_string()),
+        );
+        assert!(entries.is_empty());
+        assert_eq!(
+            error.as_deref(),
+            Some("Remote files unavailable: connection timed out")
+        );
     }
 }

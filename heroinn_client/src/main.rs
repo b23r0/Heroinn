@@ -171,6 +171,7 @@ fn main() {
             ip: ips,
             host_name: hostname,
             os,
+            platform_id: Some(std::env::consts::OS.to_string()),
             whoami: whoami::username().unwrap_or_else(|_| "UNKNOWN".to_string()),
             remark: config.remark.clone(),
             system_proxy: Some(system_proxy_display(&route_report)),

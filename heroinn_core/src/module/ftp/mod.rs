@@ -5,13 +5,12 @@
 
 mod ftp_port;
 
-use std::env::current_dir;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc::Sender};
 
-use heroinn_util::Result;
 use heroinn_util::ftp::{FTPId, FTPPacket};
 use heroinn_util::session::{ServerSession, Session, SessionBase, SessionPacket};
+use heroinn_util::{Error, Result};
 
 use self::ftp_port::FtpInstance;
 
@@ -34,19 +33,16 @@ impl ServerSession for FtpServer {
             "heroinn_ftp"
         };
 
-        let driver_path = current_dir()
-            .unwrap()
-            .join(driver)
-            .to_str()
-            .unwrap()
-            .to_string();
+        let driver_path = ftp_port::locate_sidecar(driver).map_err(Error::Other)?;
 
         let ftp = FtpInstance::new(&driver_path, peer_addr)?;
 
-        let mut ftp_1 = ftp.clone();
+        let mut ftp_1 = ftp.try_clone()?;
         let closed_2 = closed.clone();
         std::thread::spawn(move || {
-            ftp_1.wait_for_exit().unwrap();
+            if let Err(error) = ftp_1.wait_for_exit() {
+                log::warn!("ftp worker exit wait failed: {error}");
+            }
             closed_2.store(true, Ordering::Relaxed);
         });
 
@@ -54,7 +50,7 @@ impl ServerSession for FtpServer {
         let id_1 = id.clone();
         let closed_1 = closed.clone();
         let clientid_1 = clientid.to_string();
-        let mut ftp_2 = ftp.clone();
+        let mut ftp_2 = ftp.try_clone()?;
         let sender_1 = sender.clone();
         std::thread::spawn(move || {
             loop {
@@ -137,7 +133,9 @@ impl Session for FtpServer {
             log::info!("sender close msg error: {}", e);
         }
 
-        self.instance.close().unwrap();
+        if let Err(error) = self.instance.close() {
+            log::warn!("close ftp worker failed: {error}");
+        }
         log::info!("ftp session closed");
         self.closed.store(true, Ordering::Relaxed);
     }
