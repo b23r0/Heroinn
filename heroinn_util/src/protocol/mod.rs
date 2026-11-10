@@ -29,6 +29,7 @@ pub use self::outbound::{
     OutboundConnector, OutboundReader, OutboundStream, OutboundWriter, ProxyChainContext,
     ProxyContext, RouteReport, TransportFactory,
 };
+pub use self::proxy::FrozenRoute;
 use self::tcp::{TcpConnection, TcpServer};
 use self::udp::{UDPConnection, UDPServer};
 
@@ -37,11 +38,12 @@ static TUNNEL_FLAG: [u8; 4] = [0x38, 0x38, 0x38, 0x38];
 
 /// Callback invoked for every decoded inbound message.
 pub type MessageHandler = Arc<dyn Fn(Message) + Send + Sync>;
+pub type DisconnectHandler = Arc<dyn Fn(SocketAddr, HeroinnProtocol) + Send + Sync>;
 
 /// Outbound connection to a peer.
 pub enum Transport {
-    Tcp(TcpConnection),
-    Http(WSConnection),
+    Tcp(Box<TcpConnection>),
+    Http(Box<WSConnection>),
     Udp(UDPConnection),
 }
 
@@ -55,8 +57,8 @@ impl Transport {
     /// Dial a peer explicitly without proxy discovery.
     pub fn connect_direct(protocol: &HeroinnProtocol, address: &str) -> Result<Self> {
         Ok(match protocol {
-            HeroinnProtocol::TCP => Self::Tcp(TcpConnection::connect_direct(address)?),
-            HeroinnProtocol::HTTP => Self::Http(WSConnection::connect_direct(address)?),
+            HeroinnProtocol::TCP => Self::Tcp(Box::new(TcpConnection::connect_direct(address)?)),
+            HeroinnProtocol::HTTP => Self::Http(Box::new(WSConnection::connect_direct(address)?)),
             HeroinnProtocol::UDP => Self::Udp(UDPConnection::connect(address)?),
         })
     }
@@ -68,12 +70,12 @@ impl Transport {
         address: &str,
     ) -> Result<Self> {
         Ok(match protocol {
-            HeroinnProtocol::TCP => {
-                Self::Tcp(TcpConnection::connect_with_factory(factory, address)?)
-            }
-            HeroinnProtocol::HTTP => {
-                Self::Http(WSConnection::connect_with_factory(factory, address)?)
-            }
+            HeroinnProtocol::TCP => Self::Tcp(Box::new(TcpConnection::connect_with_factory(
+                factory, address,
+            )?)),
+            HeroinnProtocol::HTTP => Self::Http(Box::new(WSConnection::connect_with_factory(
+                factory, address,
+            )?)),
             HeroinnProtocol::UDP => Self::Udp(UDPConnection::connect(address)?),
         })
     }
@@ -95,13 +97,14 @@ impl Transport {
         server_local_port: u16,
     ) -> Result<Self> {
         Ok(match protocol {
-            HeroinnProtocol::TCP => Self::Tcp(TcpConnection::tunnel_direct(
+            HeroinnProtocol::TCP => Self::Tcp(Box::new(TcpConnection::tunnel_direct(
                 remote_addr,
                 server_local_port,
-            )?),
-            HeroinnProtocol::HTTP => {
-                Self::Http(WSConnection::tunnel_direct(remote_addr, server_local_port)?)
-            }
+            )?)),
+            HeroinnProtocol::HTTP => Self::Http(Box::new(WSConnection::tunnel_direct(
+                remote_addr,
+                server_local_port,
+            )?)),
             HeroinnProtocol::UDP => {
                 Self::Udp(UDPConnection::tunnel(remote_addr, server_local_port)?)
             }
@@ -116,16 +119,42 @@ impl Transport {
         server_local_port: u16,
     ) -> Result<Self> {
         Ok(match protocol {
-            HeroinnProtocol::TCP => Self::Tcp(TcpConnection::tunnel_with_factory(
+            HeroinnProtocol::TCP => Self::Tcp(Box::new(TcpConnection::tunnel_with_factory(
                 factory,
                 remote_addr,
                 server_local_port,
-            )?),
-            HeroinnProtocol::HTTP => Self::Http(WSConnection::tunnel_with_factory(
+            )?)),
+            HeroinnProtocol::HTTP => Self::Http(Box::new(WSConnection::tunnel_with_factory(
                 factory,
                 remote_addr,
                 server_local_port,
-            )?),
+            )?)),
+            HeroinnProtocol::UDP => {
+                Self::Udp(UDPConnection::tunnel(remote_addr, server_local_port)?)
+            }
+        })
+    }
+
+    pub fn tunnel_with_frozen_route(
+        factory: &TransportFactory,
+        protocol: &HeroinnProtocol,
+        remote_addr: &str,
+        server_local_port: u16,
+        frozen: &self::proxy::FrozenRoute,
+    ) -> Result<Self> {
+        Ok(match protocol {
+            HeroinnProtocol::TCP => Self::Tcp(Box::new(TcpConnection::tunnel_with_frozen_route(
+                factory,
+                remote_addr,
+                server_local_port,
+                frozen,
+            )?)),
+            HeroinnProtocol::HTTP => Self::Http(Box::new(WSConnection::tunnel_with_frozen_route(
+                factory,
+                remote_addr,
+                server_local_port,
+                frozen,
+            )?)),
             HeroinnProtocol::UDP => {
                 Self::Udp(UDPConnection::tunnel(remote_addr, server_local_port)?)
             }
@@ -171,6 +200,26 @@ impl Transport {
             Self::Tcp(connection) => Some(connection.route_report()),
             Self::Http(connection) => Some(connection.route_report()),
             Self::Udp(_) => None,
+        }
+    }
+
+    pub fn frozen_route(&self) -> Option<&self::proxy::FrozenRoute> {
+        match self {
+            Self::Tcp(connection) => connection.frozen_route(),
+            Self::Http(connection) => connection.frozen_route(),
+            Self::Udp(_) => None,
+        }
+    }
+
+    pub fn shutdown(&self, how: std::net::Shutdown) -> Result<()> {
+        match self {
+            Self::Tcp(connection) => connection.shutdown(how),
+            Self::Http(connection) => connection.shutdown(how),
+            Self::Udp(connection) => {
+                let mut connection = connection.clone();
+                connection.close();
+                Ok(())
+            }
         }
     }
 
@@ -223,12 +272,33 @@ pub enum Listener {
 impl Listener {
     /// Bind `0.0.0.0:port` and deliver every decoded message to `on_message`.
     pub fn bind(protocol: &HeroinnProtocol, port: u16, on_message: MessageHandler) -> Result<Self> {
+        Self::bind_with_disconnect(protocol, port, on_message, Arc::new(|_, _| {}))
+    }
+
+    pub fn bind_with_disconnect(
+        protocol: &HeroinnProtocol,
+        port: u16,
+        on_message: MessageHandler,
+        on_disconnect: DisconnectHandler,
+    ) -> Result<Self> {
         let address = format!("0.0.0.0:{}", port);
 
         Ok(match protocol {
-            HeroinnProtocol::TCP => Self::Tcp(TcpServer::new(&address, on_message)?),
-            HeroinnProtocol::HTTP => Self::Http(WSServer::new(&address, on_message)?),
-            HeroinnProtocol::UDP => Self::Udp(UDPServer::new(&address, on_message)?),
+            HeroinnProtocol::TCP => Self::Tcp(TcpServer::new_with_disconnect(
+                &address,
+                on_message,
+                on_disconnect,
+            )?),
+            HeroinnProtocol::HTTP => Self::Http(WSServer::new_with_disconnect(
+                &address,
+                on_message,
+                on_disconnect,
+            )?),
+            HeroinnProtocol::UDP => Self::Udp(UDPServer::new_with_disconnect(
+                &address,
+                on_message,
+                on_disconnect,
+            )?),
         })
     }
 

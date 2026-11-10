@@ -12,7 +12,7 @@ use heroinn_util::{
     Error, HeroinnProtocol, Result,
     ftp::{FTPGetHeader, FTPId, FTPPacket, FTPPutHeader, method::*},
     packet::TunnelRequest,
-    protocol::{Transport, TransportFactory},
+    protocol::{FrozenRoute, Transport, TransportFactory},
     rpc::{RpcMessage, RpcServer},
     session::{ClientSession, Session, SessionBase, SessionPacket},
 };
@@ -31,20 +31,28 @@ pub struct FtpClient {
     rpc_server: RpcServer,
     sender: Sender<SessionBase>,
     transport_factory: Arc<TransportFactory>,
+    frozen_route: Option<FrozenRoute>,
 }
 
 impl ClientSession for FtpClient {
     fn new_client(sender: Sender<SessionBase>, clientid: &str, id: &str) -> Result<Self> {
-        Self::new_client_with_factory(sender, clientid, id, Arc::new(TransportFactory::direct()))
+        Self::new_client_with_route(
+            sender,
+            clientid,
+            id,
+            Arc::new(TransportFactory::direct()),
+            None,
+        )
     }
 }
 
 impl FtpClient {
-    pub fn new_client_with_factory(
+    pub fn new_client_with_route(
         sender: Sender<SessionBase>,
         clientid: &str,
         id: &str,
         transport_factory: Arc<TransportFactory>,
+        frozen_route: Option<FrozenRoute>,
     ) -> Result<Self> {
         let mut rpc_server = RpcServer::new();
         rpc_server.register("get_disk_info", get_disk_info);
@@ -61,6 +69,7 @@ impl FtpClient {
             rpc_server,
             sender,
             transport_factory,
+            frozen_route,
         })
     }
 }
@@ -106,15 +115,17 @@ impl Session for FtpClient {
                 let request = TunnelRequest::parse(&packet.data)?;
                 let closed = self.closed.clone();
                 let factory = self.transport_factory.clone();
+                let frozen_route = self.frozen_route.clone();
 
-                std::thread::spawn(move || upload_worker(request, closed, factory));
+                std::thread::spawn(move || upload_worker(request, closed, factory, frozen_route));
             }
             FTPId::Put => {
                 let request = TunnelRequest::parse(&packet.data)?;
                 let closed = self.closed.clone();
                 let factory = self.transport_factory.clone();
+                let frozen_route = self.frozen_route.clone();
 
-                std::thread::spawn(move || download_worker(request, closed, factory));
+                std::thread::spawn(move || download_worker(request, closed, factory, frozen_route));
             }
             FTPId::Close => {
                 self.close();
@@ -135,8 +146,13 @@ impl Session for FtpClient {
 }
 
 /// Open a tunnel back to the server and stream the requested file into it.
-fn upload_worker(request: TunnelRequest, closed: Arc<AtomicBool>, factory: Arc<TransportFactory>) {
-    let mut tunnel = match open_tunnel(request.port, &factory) {
+fn upload_worker(
+    request: TunnelRequest,
+    closed: Arc<AtomicBool>,
+    factory: Arc<TransportFactory>,
+    frozen_route: Option<FrozenRoute>,
+) {
+    let mut tunnel = match open_tunnel(request.port, &factory, frozen_route.as_ref()) {
         Ok(p) => p,
         Err(e) => {
             diagnostics::report_connect_failure(&e);
@@ -256,8 +272,9 @@ fn download_worker(
     request: TunnelRequest,
     closed: Arc<AtomicBool>,
     factory: Arc<TransportFactory>,
+    frozen_route: Option<FrozenRoute>,
 ) {
-    let mut tunnel = match open_tunnel(request.port, &factory) {
+    let mut tunnel = match open_tunnel(request.port, &factory, frozen_route.as_ref()) {
         Ok(p) => p,
         Err(e) => {
             diagnostics::report_connect_failure(&e);
@@ -371,10 +388,61 @@ fn report_tunnel_failure(
 }
 
 /// Open a reverse tunnel back to the configured server.
-fn open_tunnel(port: u16, factory: &TransportFactory) -> Result<Transport> {
+fn open_tunnel(
+    port: u16,
+    factory: &TransportFactory,
+    frozen_route: Option<&FrozenRoute>,
+) -> Result<Transport> {
     let config = master_configure();
     let proto = HeroinnProtocol::try_from(config.protocol)
         .map_err(|e| Error::Other(format!("unknown protocol : {}", e)))?;
 
-    Transport::tunnel_with_factory(factory, &proto, &config.address, port)
+    open_tunnel_with_snapshot(port, factory, &proto, &config.address, frozen_route)
+}
+
+fn open_tunnel_with_snapshot(
+    port: u16,
+    factory: &TransportFactory,
+    protocol: &HeroinnProtocol,
+    address: &str,
+    frozen_route: Option<&FrozenRoute>,
+) -> Result<Transport> {
+    match protocol {
+        HeroinnProtocol::TCP | HeroinnProtocol::HTTP => {
+            let frozen = frozen_route.ok_or_else(|| {
+                Error::Other("FTP reverse tunnel has no frozen proxy route".to_string())
+            })?;
+            Transport::tunnel_with_frozen_route(factory, protocol, address, port, frozen)
+        }
+        HeroinnProtocol::UDP => Transport::tunnel_direct(protocol, address, port),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tcp_ftp_tunnel_without_a_frozen_route_fails_closed() {
+        let factory = TransportFactory::direct();
+        let error =
+            open_tunnel_with_snapshot(1, &factory, &HeroinnProtocol::TCP, "127.0.0.1:1", None)
+                .err()
+                .expect("missing frozen route must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("FTP reverse tunnel has no frozen proxy route")
+        );
+
+        let error =
+            open_tunnel_with_snapshot(1, &factory, &HeroinnProtocol::HTTP, "127.0.0.1:1", None)
+                .err()
+                .expect("missing frozen route must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("FTP reverse tunnel has no frozen proxy route")
+        );
+    }
 }

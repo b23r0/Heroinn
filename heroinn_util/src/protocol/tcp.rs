@@ -13,9 +13,15 @@ use crate::error::{Error, Result};
 use crate::packet::Message;
 use crate::protocol::frame::{MAX_PACKET, read_frame, write_frame};
 use crate::protocol::outbound::{OutboundStream, ProxyContext, RouteReport, TransportFactory};
-use crate::protocol::proxy::Destination;
-use crate::protocol::{MessageHandler, TUNNEL_FLAG};
+use crate::protocol::proxy::{Destination, FrozenRoute};
+use crate::protocol::{DisconnectHandler, MessageHandler, TUNNEL_FLAG};
 use crate::{HeroinnProtocol, cur_timestamp_secs};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConnectionEnd {
+    Closed,
+    Tunnel,
+}
 
 /// Accepting side of a TCP listener.
 pub struct TcpServer {
@@ -29,15 +35,17 @@ pub struct TcpConnection {
     s: Option<OutboundStream>,
     proxy_context: Option<ProxyContext>,
     route_report: RouteReport,
+    frozen_route: Option<FrozenRoute>,
     closed: Arc<AtomicBool>,
 }
 
 impl Clone for TcpConnection {
     fn clone(&self) -> Self {
         Self {
-            s: self.s.as_ref().map(|stream| stream.try_clone().unwrap()),
+            s: self.s.as_ref().and_then(|stream| stream.try_clone().ok()),
             proxy_context: self.proxy_context.clone(),
             route_report: self.route_report.clone(),
+            frozen_route: self.frozen_route.clone(),
             closed: self.closed.clone(),
         }
     }
@@ -50,6 +58,14 @@ impl TcpServer {
     /// 4-byte prefix: [`TUNNEL_FLAG`] turns the connection into a byte pump
     /// toward `127.0.0.1:<port>`, anything else is a length-prefixed frame.
     pub fn new(address: &str, on_message: MessageHandler) -> Result<Self> {
+        Self::new_with_disconnect(address, on_message, Arc::new(|_, _| {}))
+    }
+
+    pub fn new_with_disconnect(
+        address: &str,
+        on_message: MessageHandler,
+        on_disconnect: DisconnectHandler,
+    ) -> Result<Self> {
         let listener = TcpListener::bind(address)?;
         let local_addr = listener.local_addr()?;
 
@@ -68,7 +84,7 @@ impl TcpServer {
                     std::thread::sleep(Duration::from_millis(200));
 
                     match stream {
-                        Ok(s) => accept_connection(s, &on_message, &connections_1),
+                        Ok(s) => accept_connection(s, &on_message, &on_disconnect, &connections_1),
                         Err(e) => {
                             if e.kind() == std::io::ErrorKind::WouldBlock {
                                 if closed_1.load(Ordering::Relaxed) {
@@ -81,14 +97,16 @@ impl TcpServer {
                     }
                 }
 
-                let mut conns = connections_1.lock().unwrap();
+                let mut conns = connections_1
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 for i in conns.values_mut() {
                     let _ = i.shutdown(std::net::Shutdown::Both);
                 }
                 conns.clear();
                 log::info!("server closed");
             })
-            .unwrap();
+            .map_err(|error| Error::Other(format!("cannot start TCP listener worker: {error}")))?;
 
         Ok(Self {
             local_addr,
@@ -109,7 +127,7 @@ impl TcpServer {
         let mut conn = self
             .connections
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(peer_addr)
             .ok_or_else(|| Error::NotFound(format!("tcp client {}", peer_addr)))?
             .try_clone()?;
@@ -118,7 +136,10 @@ impl TcpServer {
     }
 
     pub fn contains_addr(&mut self, peer_addr: &SocketAddr) -> bool {
-        self.connections.lock().unwrap().contains_key(peer_addr)
+        self.connections
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains_key(peer_addr)
     }
 }
 
@@ -126,9 +147,13 @@ impl TcpServer {
 fn accept_connection(
     s: TcpStream,
     on_message: &MessageHandler,
+    on_disconnect: &DisconnectHandler,
     connections: &Arc<Mutex<HashMap<SocketAddr, TcpStream>>>,
 ) {
-    s.set_nonblocking(false).unwrap();
+    if let Err(error) = s.set_nonblocking(false) {
+        log::warn!("failed to set TCP connection blocking mode: {}", error);
+        return;
+    }
 
     if let Err(e) = SockRef::from(&s)
         .set_tcp_keepalive(&TcpKeepalive::new().with_time(Duration::from_millis(200)))
@@ -136,46 +161,79 @@ fn accept_connection(
         log::warn!("failed to enable tcp keepalive : {}", e);
     }
 
-    let peer_addr = s.peer_addr().unwrap();
-    let mut reader = s.try_clone().unwrap();
-    connections.lock().unwrap().insert(peer_addr, s);
+    let peer_addr = match s.peer_addr() {
+        Ok(peer_addr) => peer_addr,
+        Err(error) => {
+            log::warn!("failed to read accepted TCP peer address: {}", error);
+            return;
+        }
+    };
+    let mut reader = match s.try_clone() {
+        Ok(reader) => reader,
+        Err(error) => {
+            log::warn!("failed to clone accepted TCP connection: {}", error);
+            return;
+        }
+    };
+    connections
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(peer_addr, s);
 
     let connections = connections.clone();
     let on_message = on_message.clone();
+    let on_disconnect = on_disconnect.clone();
 
-    std::thread::Builder::new()
+    if let Err(error) = std::thread::Builder::new()
         .name(format!("tcp connection : {}", peer_addr))
         .spawn(move || {
-            handle_connection(&mut reader, peer_addr, &on_message);
-            log::info!("connection closed or entered tunnel : {}", peer_addr);
-            connections.lock().unwrap().remove(&peer_addr);
+            let end = handle_connection(&mut reader, peer_addr, &on_message);
+            connections
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&peer_addr);
+            match end {
+                ConnectionEnd::Closed => {
+                    log::info!("connection closed : {}", peer_addr);
+                    on_disconnect(peer_addr, HeroinnProtocol::TCP);
+                }
+                ConnectionEnd::Tunnel => {
+                    log::info!("connection entered tunnel : {}", peer_addr);
+                }
+            }
         })
-        .unwrap();
+    {
+        log::warn!("failed to start TCP connection worker: {}", error);
+    }
 }
 
 /// Read frames until the peer disconnects or requests a tunnel.
-fn handle_connection(reader: &mut TcpStream, peer_addr: SocketAddr, on_message: &MessageHandler) {
+fn handle_connection(
+    reader: &mut TcpStream,
+    peer_addr: SocketAddr,
+    on_message: &MessageHandler,
+) -> ConnectionEnd {
     loop {
         let mut size_buf = [0u8; 4];
         if reader.read_exact(&mut size_buf).is_err() {
-            return;
+            return ConnectionEnd::Closed;
         }
 
         if size_buf == TUNNEL_FLAG {
             serve_tunnel(reader, peer_addr);
-            return;
+            return ConnectionEnd::Tunnel;
         }
 
         let size = u32::from_be_bytes(size_buf) as usize;
 
         if size > MAX_PACKET {
             log::error!("packet length error!");
-            return;
+            return ConnectionEnd::Closed;
         }
 
         let mut buf = vec![0u8; size];
         if reader.read_exact(&mut buf).is_err() {
-            return;
+            return ConnectionEnd::Closed;
         }
 
         match Message::new(peer_addr, HeroinnProtocol::TCP, &buf) {
@@ -238,6 +296,7 @@ impl TcpConnection {
             s: Some(OutboundStream::from_tcp(TcpStream::connect(address)?)?),
             proxy_context: None,
             route_report: RouteReport::default(),
+            frozen_route: None,
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -253,10 +312,12 @@ impl TcpConnection {
         let stream = factory.open(&destination)?;
         let proxy_context = stream.proxy_context().cloned();
         let route_report = stream.route_report().clone();
+        let frozen_route = stream.frozen_route().cloned();
         Ok(Self {
             s: Some(stream),
             proxy_context,
             route_report,
+            frozen_route,
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -277,6 +338,7 @@ impl TcpConnection {
             s: Some(s),
             proxy_context: None,
             route_report: RouteReport::default(),
+            frozen_route: None,
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -297,12 +359,44 @@ impl TcpConnection {
         let mut s = factory.open(&destination)?;
         let proxy_context = s.proxy_context().cloned();
         let route_report = s.route_report().clone();
+        let frozen_route = s.frozen_route().cloned();
         s.write_all(&TUNNEL_FLAG)?;
         s.write_all(&server_local_port.to_be_bytes())?;
         Ok(Self {
             s: Some(s),
             proxy_context,
             route_report,
+            frozen_route,
+            closed: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
+    /// Dial a reverse tunnel using the exact route snapshot from the main
+    /// connection. The handshake target is still the same Heroinn server;
+    /// only the server-local tunnel port changes.
+    pub fn tunnel_with_frozen_route(
+        factory: &TransportFactory,
+        remote_addr: &str,
+        server_local_port: u16,
+        frozen: &FrozenRoute,
+    ) -> Result<Self> {
+        let destination = Destination::parse(remote_addr)?;
+        log::info!(
+            "start frozen-route tunnel [{}] [{}]",
+            remote_addr,
+            server_local_port
+        );
+        let mut s = factory.open_frozen(&destination, frozen)?;
+        let proxy_context = s.proxy_context().cloned();
+        let route_report = s.route_report().clone();
+        let frozen_route = s.frozen_route().cloned();
+        s.write_all(&TUNNEL_FLAG)?;
+        s.write_all(&server_local_port.to_be_bytes())?;
+        Ok(Self {
+            s: Some(s),
+            proxy_context,
+            route_report,
+            frozen_route,
             closed: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -333,6 +427,7 @@ impl TcpConnection {
                     s: Some(OutboundStream::from_tcp(s)?),
                     proxy_context: None,
                     route_report: RouteReport::default(),
+                    frozen_route: None,
                     closed: Arc::new(AtomicBool::new(false)),
                 },
                 addr,
@@ -365,6 +460,14 @@ impl TcpConnection {
 
     pub fn route_report(&self) -> &RouteReport {
         &self.route_report
+    }
+
+    pub fn frozen_route(&self) -> Option<&FrozenRoute> {
+        self.frozen_route.as_ref()
+    }
+
+    pub fn shutdown(&self, how: std::net::Shutdown) -> Result<()> {
+        self.stream()?.shutdown(how).map_err(Error::Io)
     }
 
     pub fn remote_closed(&self) -> Result<bool> {
@@ -403,7 +506,15 @@ impl TcpConnection {
 impl Drop for TcpConnection {
     fn drop(&mut self) {
         if let Some(s) = self.s.as_ref() {
-            log::info!("tcp client [{}] dropped", s.peer_addr().unwrap());
+            match s.peer_addr() {
+                Ok(peer) => log::info!("tcp client [{}] dropped", peer),
+                Err(error) => {
+                    log::debug!(
+                        "tcp client with unavailable peer address dropped: {}",
+                        error
+                    )
+                }
+            }
             self.s = None;
         } else {
             log::info!("tcp client dropped");
@@ -414,8 +525,20 @@ impl Drop for TcpConnection {
 impl Drop for TcpServer {
     fn drop(&mut self) {
         self.close();
-        for i in self.connections.lock().unwrap().values() {
-            log::info!("tcp [{}] dropped", i.peer_addr().unwrap());
+        let connections = self
+            .connections
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for connection in connections.values() {
+            match connection.peer_addr() {
+                Ok(peer) => log::info!("tcp [{}] dropped", peer),
+                Err(error) => {
+                    log::debug!(
+                        "tcp server connection with unavailable peer address: {}",
+                        error
+                    )
+                }
+            }
         }
     }
 }
@@ -441,6 +564,140 @@ fn test_tcp_tunnel() {
         assert!(buf == [4, 5, 6, 7]);
     }
 
+    server.close();
+}
+
+#[test]
+fn dropping_connection_after_remote_close_does_not_panic() {
+    enable_test_logging();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let client = TcpStream::connect(address).unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    let connection = TcpConnection {
+        s: Some(OutboundStream::from_tcp(stream).unwrap()),
+        proxy_context: None,
+        route_report: RouteReport::default(),
+        frozen_route: None,
+        closed: Arc::new(AtomicBool::new(false)),
+    };
+    socket2::SockRef::from(&client)
+        .set_linger(Some(Duration::ZERO))
+        .unwrap();
+    drop(client);
+    std::thread::sleep(Duration::from_millis(50));
+    let _ = connection.shutdown(std::net::Shutdown::Both);
+    std::thread::sleep(Duration::from_millis(50));
+    #[cfg(unix)]
+    assert!(
+        connection.stream().unwrap().peer_addr().is_err(),
+        "test precondition: peer address should be unavailable after the peer reset"
+    );
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(connection)));
+    assert!(
+        result.is_ok(),
+        "dropping a closed connection must not panic"
+    );
+}
+
+#[test]
+fn dropping_tcp_server_after_remote_close_does_not_panic() {
+    enable_test_logging();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let client = TcpStream::connect(address).unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    socket2::SockRef::from(&client)
+        .set_linger(Some(Duration::ZERO))
+        .unwrap();
+    drop(client);
+    std::thread::sleep(Duration::from_millis(50));
+    #[cfg(unix)]
+    assert!(
+        stream.peer_addr().is_err(),
+        "test precondition: server peer address should be unavailable after the client reset"
+    );
+
+    let mut connections = HashMap::new();
+    connections.insert(address, stream);
+    let server = TcpServer {
+        local_addr: address,
+        closed: Arc::new(AtomicBool::new(false)),
+        connections: Arc::new(Mutex::new(connections)),
+    };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(server)));
+    assert!(
+        result.is_ok(),
+        "dropping a server with a closed peer must not panic"
+    );
+}
+
+#[cfg(test)]
+fn enable_test_logging() {
+    struct TestLogger;
+
+    impl log::Log for TestLogger {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() <= log::Level::Info
+        }
+
+        fn log(&self, _record: &log::Record<'_>) {}
+
+        fn flush(&self) {}
+    }
+
+    static LOGGER: TestLogger = TestLogger;
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Info);
+}
+
+#[test]
+fn tcp_server_reports_transport_disconnect_immediately() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut server = TcpServer::new_with_disconnect(
+        "127.0.0.1:0",
+        Arc::new(|_| {}),
+        Arc::new(move |peer, protocol| {
+            let _ = sender.send((peer, protocol));
+        }),
+    )
+    .unwrap();
+    let address = server.local_addr().unwrap();
+    let client = TcpStream::connect(address).unwrap();
+    drop(client);
+    let (peer, protocol) = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("disconnect callback");
+    assert_eq!(peer.ip(), address.ip());
+    assert_eq!(protocol, HeroinnProtocol::TCP);
+    server.close();
+}
+
+#[test]
+fn tcp_tunnel_does_not_report_a_main_transport_disconnect() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut server = TcpServer::new_with_disconnect(
+        "127.0.0.1:0",
+        Arc::new(|_| {}),
+        Arc::new(move |peer, protocol| {
+            let _ = sender.send((peer, protocol));
+        }),
+    )
+    .unwrap();
+    let tunnel_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let tunnel_port = tunnel_listener.local_addr().unwrap().port();
+    let remote = format!("127.0.0.1:{}", server.local_addr().unwrap().port());
+
+    let mut tunnel = TcpConnection::tunnel(&remote, tunnel_port).unwrap();
+    let (mut local, _) = TcpConnection::tunnel_server(tunnel_listener, 5).unwrap();
+    tunnel.send(b"still-connected").unwrap();
+    assert_eq!(local.recv().unwrap(), b"still-connected");
+
+    assert!(
+        receiver.recv_timeout(Duration::from_millis(500)).is_err(),
+        "starting a data tunnel must not be reported as main-transport disconnect"
+    );
     server.close();
 }
 

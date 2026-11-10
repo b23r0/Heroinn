@@ -6,6 +6,7 @@ members = [
     "heroinn_core",
     "heroinn_util",
     "th3rd/heroinn_ftp",
+    "th3rd/heroinn_socks5proxy",
     # Vendored terminal implementation that backs interactive shell sessions.
     "th3rd/heroinn_shell",
     "th3rd/heroinn_shell/protocol",

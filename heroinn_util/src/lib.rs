@@ -19,6 +19,7 @@ pub mod packet;
 pub mod protocol;
 pub mod rpc;
 pub mod session;
+pub mod socks5;
 pub mod transfer_rate;
 
 pub use error::{Error, Result};
@@ -585,6 +586,7 @@ pub enum HeroinnClientMsgID {
     HostInfo,
     Heartbeat,
     SessionPacket,
+    Socks5,
 }
 
 impl From<HeroinnClientMsgID> for u8 {
@@ -593,6 +595,7 @@ impl From<HeroinnClientMsgID> for u8 {
             HeroinnClientMsgID::HostInfo => 0x00,
             HeroinnClientMsgID::Heartbeat => 0x01,
             HeroinnClientMsgID::SessionPacket => 0x02,
+            HeroinnClientMsgID::Socks5 => 0x03,
         }
     }
 }
@@ -605,6 +608,7 @@ impl TryFrom<u8> for HeroinnClientMsgID {
             0x00 => Ok(HeroinnClientMsgID::HostInfo),
             0x01 => Ok(HeroinnClientMsgID::Heartbeat),
             0x02 => Ok(HeroinnClientMsgID::SessionPacket),
+            0x03 => Ok(HeroinnClientMsgID::Socks5),
             other => Err(Error::UnknownMessageId(other)),
         }
     }
@@ -617,6 +621,7 @@ impl HeroinnClientMsgID {
             HeroinnClientMsgID::HostInfo => 0x00,
             HeroinnClientMsgID::Heartbeat => 0x01,
             HeroinnClientMsgID::SessionPacket => 0x02,
+            HeroinnClientMsgID::Socks5 => 0x03,
         }
     }
 }
@@ -628,6 +633,7 @@ pub enum HeroinnServerCommandID {
     File,
     SessionPacket,
     SetTransferRate,
+    Socks5,
 }
 
 impl From<HeroinnServerCommandID> for u8 {
@@ -637,6 +643,7 @@ impl From<HeroinnServerCommandID> for u8 {
             HeroinnServerCommandID::File => 0x01,
             HeroinnServerCommandID::SessionPacket => 0x02,
             HeroinnServerCommandID::SetTransferRate => 0x03,
+            HeroinnServerCommandID::Socks5 => 0x04,
         }
     }
 }
@@ -650,6 +657,7 @@ impl TryFrom<u8> for HeroinnServerCommandID {
             0x01 => Ok(HeroinnServerCommandID::File),
             0x02 => Ok(HeroinnServerCommandID::SessionPacket),
             0x03 => Ok(HeroinnServerCommandID::SetTransferRate),
+            0x04 => Ok(HeroinnServerCommandID::Socks5),
             other => Err(Error::UnknownMessageId(other)),
         }
     }
@@ -663,6 +671,7 @@ impl HeroinnServerCommandID {
             HeroinnServerCommandID::File => 0x01,
             HeroinnServerCommandID::SessionPacket => 0x02,
             HeroinnServerCommandID::SetTransferRate => 0x03,
+            HeroinnServerCommandID::Socks5 => 0x04,
         }
     }
 }
@@ -677,6 +686,20 @@ mod server_command_tests {
         assert_eq!(
             HeroinnServerCommandID::try_from(0x03).unwrap(),
             HeroinnServerCommandID::SetTransferRate
+        );
+    }
+
+    #[test]
+    fn socks5_commands_use_new_additive_ids() {
+        assert_eq!(HeroinnServerCommandID::Socks5.to_u8(), 0x04);
+        assert_eq!(
+            HeroinnServerCommandID::try_from(0x04).unwrap(),
+            HeroinnServerCommandID::Socks5
+        );
+        assert_eq!(HeroinnClientMsgID::Socks5.to_u8(), 0x03);
+        assert_eq!(
+            HeroinnClientMsgID::try_from(0x03).unwrap(),
+            HeroinnClientMsgID::Socks5
         );
     }
 }

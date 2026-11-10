@@ -321,6 +321,7 @@ mod tests {
             remark: String::new(),
             system_proxy: None,
             socks5_proxy: None,
+            capabilities: None,
         }
     }
 

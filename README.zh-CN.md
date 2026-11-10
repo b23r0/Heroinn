@@ -30,8 +30,9 @@ Heroinn 是一个使用 Rust 编写的跨平台命令控制与后渗透框架，
 - 桌面 GUI，可管理监听器、在线 Agent、Shell 会话和文件。
 - 交互式 PTY Shell，每个会话使用独立终端窗口。
 - 文件管理器，支持断点续传和大文件传输。
-- 客户端生成器，可为 Agent 写入连接配置。
-- 每个 Agent 的总传输速率限制，默认 1 MB/s，所有上行和下行流量共享同一配额。
+- Agent生成器可以配置通过socks5代理连接服务器（支持和系统代理构成代理链）
+- 设置每个 Agent 的总传输速率限制，默认 1 MB/s。
+- 支持Socks5 Reverse Proxy（通过代理链）
 - 支持 TCP、HTTP 和可靠 UDP 传输。
 - 支持 Windows 10+（Windows Server 2019+）、Linux、BSD 和 macOS。
 - 使用 TCP 或 HTTP 通信时，Agent 会自动读取环境变量或当前桌面/用户系统代理，
@@ -66,20 +67,26 @@ cd Heroinn
 cargo build --release --locked
 ```
 
-构建会生成四个可执行程序：
+构建会生成五个可执行程序：
 
 - `heroinn` — 服务端 GUI
 - `heroinn_client` — Agent
 - `heroinn_ftp` — 文件管理器
 - `heroinn_shell` — 交互式 Shell 会话使用的终端窗口
+- `heroinn_socks5proxy` — 在线 Agent 使用的反弹 SOCKS5 代理 GUI
 
-`heroinn_shell` 必须与 `heroinn` 可执行程序放在同一目录，因为服务端会从
-当前工作目录启动它。
+`heroinn_shell`、`heroinn_ftp` 和 `heroinn_socks5proxy` 必须与 `heroinn`
+可执行程序放在同一目录，因为服务端会从当前工作目录启动它们。
 
 ## 客户端生成
 
 服务端的 **Generator** 页面不会编译 Agent，而是复制一个预编译的
 `heroinn_client`，并原地改写其中嵌入的连接配置。
+
+对于 TCP 和 HTTP Agent，Generator 还可以嵌入可选的 SOCKS5 代理配置。如果
+生成的 Agent 同时发现系统代理，则会先连接系统代理，再连接配置的 SOCKS5
+代理，最后连接服务端，形成代理链。UDP Agent 不提供 SOCKS5 配置。SOCKS5
+凭据会嵌入生成的客户端二进制，并可能被提取。
 
 模板会优先在当前运行的 `heroinn` 可执行程序所在目录中查找，然后搜索当前
 工作目录。既支持带平台后缀的旧名称，也支持 Cargo 的标准输出名称：
@@ -107,7 +114,9 @@ JSON；如果模板中存在多个有效连接标记，生成器会拒绝处理�
 | `heroinn_core` | 共享应用核心逻辑 |
 | `heroinn_util` | 协议、传输、数据包和工具层 |
 | `th3rd/heroinn_ftp` | 文件管理器 |
-| `th3rd/alacritty-driver` | `heroinn_shell` 使用的终端驱动 |
+| `th3rd/heroinn_socks5proxy` | 反弹 SOCKS5 代理 GUI 与 sidecar |
+| `th3rd/heroinn_shell` | `heroinn_shell` 使用的终端实现 |
+| `th3rd/heroinn_conpty` | 仓库内置的 Windows ConPTY 支持 |
 
 项目自身 crate 使用 edition 2024，依赖版本统一固定在 workspace 根目录的
 `[workspace.dependencies]` 中；仓库内置的终端 crate 保留上游 edition。
@@ -124,7 +133,7 @@ JSON；如果模板中存在多个有效连接标记，生成器会拒绝处理�
 ```sh
 cargo fmt -p heroinn_ftp -- --check
 cargo check --workspace --lib --bins --locked
-cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp --all-targets --locked -- -D warnings
+cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp -p heroinn_socks5proxy --all-targets --locked -- -D warnings
 cargo test --workspace --exclude alacritty_terminal --locked
 cargo test -p alacritty_terminal --lib --locked
 cargo test -p alacritty_config_derive --test config --locked

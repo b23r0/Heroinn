@@ -2,9 +2,10 @@
 //! and for reverse tunnels.
 
 use std::collections::HashMap;
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 
 use websocket::OwnedMessage;
 use websocket::stream::sync::ReadWritePair;
@@ -17,10 +18,18 @@ use crate::packet::Message;
 use crate::protocol::outbound::{
     OutboundConnector, OutboundReader, OutboundWriter, ProxyContext, RouteReport, TransportFactory,
 };
-use crate::protocol::proxy::{Destination, ProxyRoute};
-use crate::protocol::{MessageHandler, TUNNEL_FLAG};
+use crate::protocol::proxy::{Destination, FrozenRoute, ProxyRoute};
+use crate::protocol::{DisconnectHandler, MessageHandler, TUNNEL_FLAG};
 
 use super::tcp::TcpConnection;
+
+const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConnectionEnd {
+    Closed,
+    Tunnel,
+}
 
 /// Accepting side of a WebSocket listener.
 pub struct WSServer {
@@ -37,12 +46,21 @@ pub struct WSConnection {
     local_addr: SocketAddr,
     proxy_context: Option<ProxyContext>,
     route_report: RouteReport,
+    frozen_route: Option<FrozenRoute>,
     closed: Arc<AtomicBool>,
 }
 
 impl WSServer {
     /// Bind `address` and pass every decoded message to `on_message`.
     pub fn new(address: &str, on_message: MessageHandler) -> Result<Self> {
+        Self::new_with_disconnect(address, on_message, Arc::new(|_, _| {}))
+    }
+
+    pub fn new_with_disconnect(
+        address: &str,
+        on_message: MessageHandler,
+        on_disconnect: DisconnectHandler,
+    ) -> Result<Self> {
         let server = TcpListener::bind(address)?;
         server.set_nonblocking(true)?;
 
@@ -96,14 +114,29 @@ impl WSServer {
                             continue;
                         }
                     };
+                    let remote_addr = match client.peer_addr() {
+                        Ok(address) => address,
+                        Err(error) => {
+                            log::warn!("ws peer address failed : {}", error);
+                            continue;
+                        }
+                    };
 
                     let connections_2 = connections_1.clone();
                     let on_message = on_message.clone();
+                    let on_disconnect = on_disconnect.clone();
                     std::thread::Builder::new()
                         .name(format!("ws connection : {}", local_addr))
                         .spawn(move || {
-                            handle_connection(client, &on_message, &connections_2);
-                            log::info!("ws client worker finished");
+                            match handle_connection(client, &on_message, &connections_2) {
+                                ConnectionEnd::Closed => {
+                                    log::info!("ws client worker finished");
+                                    on_disconnect(remote_addr, HeroinnProtocol::HTTP);
+                                }
+                                ConnectionEnd::Tunnel => {
+                                    log::info!("ws client worker entered tunnel");
+                                }
+                            }
                         })
                         .unwrap();
                 }
@@ -154,7 +187,7 @@ fn handle_connection(
     client: websocket::sync::Client<TcpStream>,
     on_message: &MessageHandler,
     connections: &Arc<Mutex<HashMap<SocketAddr, Writer<TcpStream>>>>,
-) {
+) -> ConnectionEnd {
     client.set_nonblocking(false).unwrap();
     let remote_addr = client.peer_addr().unwrap();
 
@@ -162,7 +195,7 @@ fn handle_connection(
 
     let Ok((mut receiver, sender)) = client.split() else {
         log::warn!("failed to split ws connection {}", remote_addr);
-        return;
+        return ConnectionEnd::Closed;
     };
 
     connections.lock().unwrap().insert(remote_addr, sender);
@@ -190,7 +223,7 @@ fn handle_connection(
 
                     let port = u16::from_be_bytes([buf[4], buf[5]]);
                     serve_tunnel(receiver, sender, remote_addr, port);
-                    break;
+                    return ConnectionEnd::Tunnel;
                 }
 
                 match Message::new(remote_addr, HeroinnProtocol::HTTP, &buf) {
@@ -203,6 +236,7 @@ fn handle_connection(
     }
 
     connections.lock().unwrap().remove(&remote_addr);
+    ConnectionEnd::Closed
 }
 
 /// Pump bytes both ways between the WebSocket peer and a local TCP connection.
@@ -309,15 +343,14 @@ impl WSConnection {
         let local_addr = stream.local_addr()?;
         let proxy_context = stream.proxy_context().cloned();
         let route_report = stream.route_report().clone();
+        let frozen_route = stream.frozen_route().cloned();
         let close_reader = stream.close_reader();
         let (reader, writer) = stream
             .split()
             .map_err(|e| Error::Other(format!("ws stream split error : {}", e)))?;
 
-        let s = websocket::ClientBuilder::new(&format!("ws://{}", address))
-            .map_err(|e| Error::Other(format!("ws url error : {}", e)))?
-            .connect_on(ReadWritePair(reader, writer))
-            .map_err(|e| Error::Other(format!("ws handshake error : {}", e)))?;
+        let s =
+            connect_on_with_timeout(address, reader, writer, &close_reader, WS_HANDSHAKE_TIMEOUT)?;
         let (reader, writer) = s
             .split()
             .map_err(|e| Error::Other(format!("ws split error : {}", e)))?;
@@ -328,6 +361,7 @@ impl WSConnection {
             local_addr,
             proxy_context,
             route_report,
+            frozen_route,
         ))
     }
 
@@ -338,6 +372,7 @@ impl WSConnection {
         local_addr: SocketAddr,
         proxy_context: Option<ProxyContext>,
         route_report: RouteReport,
+        frozen_route: Option<FrozenRoute>,
     ) -> Self {
         Self {
             reader: Some(Arc::new(Mutex::new(reader))),
@@ -347,6 +382,7 @@ impl WSConnection {
             local_addr,
             proxy_context,
             route_report,
+            frozen_route,
         }
     }
 
@@ -390,6 +426,52 @@ impl WSConnection {
         server_local_port: u16,
     ) -> Result<Self> {
         Self::tunnel_with_connector(factory.connector(), remote_addr, server_local_port)
+    }
+
+    pub fn tunnel_with_frozen_route(
+        factory: &TransportFactory,
+        remote_addr: &str,
+        server_local_port: u16,
+        frozen: &FrozenRoute,
+    ) -> Result<Self> {
+        log::info!(
+            "start frozen-route tunnel [{}] [{}]",
+            remote_addr,
+            server_local_port
+        );
+        let destination = Destination::parse(remote_addr)?;
+        let stream = factory.connector().open_frozen(&destination, frozen)?;
+        let local_addr = stream.local_addr()?;
+        let proxy_context = stream.proxy_context().cloned();
+        let route_report = stream.route_report().clone();
+        let frozen_route = stream.frozen_route().cloned();
+        let close_reader = stream.close_reader();
+        let (reader, writer) = stream
+            .split()
+            .map_err(|e| Error::Other(format!("ws stream split error : {}", e)))?;
+        let s = connect_on_with_timeout(
+            remote_addr,
+            reader,
+            writer,
+            &close_reader,
+            WS_HANDSHAKE_TIMEOUT,
+        )?;
+        let (reader, writer) = s
+            .split()
+            .map_err(|e| Error::Other(format!("ws split error : {}", e)))?;
+        let mut ret = Self::from_parts(
+            reader,
+            writer,
+            close_reader,
+            local_addr,
+            proxy_context,
+            route_report,
+            frozen_route,
+        );
+        let mut handshake = TUNNEL_FLAG.to_vec();
+        handshake.extend_from_slice(&server_local_port.to_be_bytes());
+        ret.send(&handshake)?;
+        Ok(ret)
     }
 
     fn tunnel_with_connector(
@@ -447,6 +529,14 @@ impl WSConnection {
         &self.route_report
     }
 
+    pub fn frozen_route(&self) -> Option<&FrozenRoute> {
+        self.frozen_route.as_ref()
+    }
+
+    pub fn shutdown(&self, how: std::net::Shutdown) -> Result<()> {
+        self.close_reader.shutdown(how).map_err(Error::Io)
+    }
+
     pub fn remote_closed(&self) -> Result<bool> {
         self.close_reader.remote_closed().map_err(Error::Io)
     }
@@ -484,6 +574,49 @@ impl WSConnection {
     }
 }
 
+fn connect_on_with_timeout(
+    address: &str,
+    reader: OutboundReader,
+    writer: OutboundWriter,
+    close_reader: &OutboundReader,
+    timeout: Duration,
+) -> Result<websocket::sync::Client<ReadWritePair<OutboundReader, OutboundWriter>>> {
+    let url = format!("ws://{}", address);
+    let (sender, receiver) = mpsc::channel();
+    let handle = std::thread::Builder::new()
+        .name(format!("ws-handshake-{address}"))
+        .spawn(move || {
+            let result = websocket::ClientBuilder::new(&url)
+                .map_err(|error| Error::Other(format!("ws url error : {}", error)))
+                .and_then(|mut builder| {
+                    builder
+                        .connect_on(ReadWritePair(reader, writer))
+                        .map_err(|error| Error::Other(format!("ws handshake error : {}", error)))
+                });
+            let _ = sender.send(());
+            result
+        })
+        .map_err(|error| Error::Other(format!("cannot start ws handshake: {}", error)))?;
+
+    match receiver.recv_timeout(timeout) {
+        Ok(()) => handle
+            .join()
+            .map_err(|_| Error::Other("ws handshake worker panicked".to_string()))?,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let _ = close_reader.shutdown(Shutdown::Both);
+            let _ = handle.join();
+            Err(Error::Timeout)
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = close_reader.shutdown(Shutdown::Both);
+            let _ = handle.join();
+            Err(Error::Other(
+                "ws handshake worker exited without a result".to_string(),
+            ))
+        }
+    }
+}
+
 impl Clone for WSConnection {
     fn clone(&self) -> Self {
         Self {
@@ -494,6 +627,7 @@ impl Clone for WSConnection {
             local_addr: self.local_addr,
             proxy_context: self.proxy_context.clone(),
             route_report: self.route_report.clone(),
+            frozen_route: self.frozen_route.clone(),
         }
     }
 }
@@ -532,6 +666,90 @@ fn test_ws_tunnel() {
         assert!(buf == [4, 5, 6, 7]);
     }
 
+    server.close();
+}
+
+#[test]
+fn websocket_handshake_timeout_closes_the_transport() {
+    use crate::protocol::outbound::OutboundStream;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let peer = std::thread::spawn(move || {
+        let (_socket, _) = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+    });
+
+    let stream = OutboundStream::from_tcp(TcpStream::connect(&address).unwrap()).unwrap();
+    let close_reader = stream.close_reader();
+    let (reader, writer) = stream.split().unwrap();
+    let started = std::time::Instant::now();
+    let result = connect_on_with_timeout(
+        &address,
+        reader,
+        writer,
+        &close_reader,
+        Duration::from_millis(100),
+    );
+    let error = match result {
+        Ok(_) => panic!("silent WebSocket peer must time out"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(error, Error::Timeout),
+        "unexpected handshake error: {error:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
+    peer.join().unwrap();
+}
+
+#[test]
+fn websocket_server_reports_transport_disconnect_immediately() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut server = WSServer::new_with_disconnect(
+        "127.0.0.1:0",
+        Arc::new(|_| {}),
+        Arc::new(move |peer, protocol| {
+            let _ = sender.send((peer, protocol));
+        }),
+    )
+    .unwrap();
+    let remote = format!("127.0.0.1:{}", server.local_addr().unwrap().port());
+    let client = WSConnection::connect_direct(&remote).unwrap();
+    drop(client);
+    let (_peer, protocol) = receiver
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("disconnect callback");
+    assert_eq!(protocol, HeroinnProtocol::HTTP);
+    server.close();
+}
+
+#[test]
+fn websocket_tunnel_does_not_report_a_main_transport_disconnect() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut server = WSServer::new_with_disconnect(
+        "127.0.0.1:0",
+        Arc::new(|_| {}),
+        Arc::new(move |peer, protocol| {
+            let _ = sender.send((peer, protocol));
+        }),
+    )
+    .unwrap();
+    let tunnel_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let tunnel_port = tunnel_listener.local_addr().unwrap().port();
+    let remote = format!("127.0.0.1:{}", server.local_addr().unwrap().port());
+
+    let mut tunnel = WSConnection::tunnel(&remote, tunnel_port).unwrap();
+    let (mut local, _) = TcpConnection::tunnel_server(tunnel_listener, 5).unwrap();
+    tunnel.send(b"still-connected").unwrap();
+    assert_eq!(local.recv().unwrap(), b"still-connected");
+
+    assert!(
+        receiver
+            .recv_timeout(std::time::Duration::from_millis(500))
+            .is_err(),
+        "starting a WebSocket tunnel must not be reported as main-transport disconnect"
+    );
     server.close();
 }
 

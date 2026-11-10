@@ -32,9 +32,10 @@ authorized security research and red-team exercises.
 - Desktop GUI for managing listeners, online agents, shell sessions, and files.
 - Interactive PTY shell with a dedicated terminal window per session.
 - File manager with resumable transfers and large-file support.
-- Client generator for producing agents with an embedded connection profile.
-- Per-agent aggregate transfer-rate limit (default 1 MB/s), shared by all inbound
-  and outbound traffic.
+- Agent generator configurable to connect to the server through a SOCKS5 proxy,
+  including a proxy chain with the system proxy.
+- Configure the aggregate transfer-rate limit per agent (default 1 MB/s).
+- SOCKS5 reverse proxy support through proxy chains.
 - TCP, HTTP, and reliable UDP transports.
 - Windows 10+ (Windows Server 2019+), Linux, BSD, and macOS support.
 - For TCP and HTTP communication, agents automatically discover the proxy from
@@ -70,20 +71,28 @@ cd Heroinn
 cargo build --release --locked
 ```
 
-The build produces four executables:
+The build produces five executables:
 
 - `heroinn` — server GUI
 - `heroinn_client` — agent
 - `heroinn_ftp` — file manager
 - `heroinn_shell` — terminal window used by interactive shell sessions
+- `heroinn_socks5proxy` — reverse SOCKS5 proxy GUI used by online agents
 
-`heroinn_shell` must be placed next to the `heroinn` executable because the
-server launches it from its working directory.
+`heroinn_shell`, `heroinn_ftp`, and `heroinn_socks5proxy` must be placed next to
+the `heroinn` executable because the server launches them from its working
+directory.
 
 ## Client generation
 
 The server's **Generator** tab does not compile an agent. It copies a prebuilt
 `heroinn_client` and rewrites its embedded connection stamp in place.
+
+For TCP and HTTP agents, the Generator can also embed an optional SOCKS5 proxy.
+If the generated agent discovers a system proxy, it connects through the system
+proxy to the configured SOCKS5 proxy and then to the server, forming a proxy
+chain. SOCKS5 settings are not available for UDP agents. Any SOCKS5 credentials
+are embedded in the generated client binary and may be extractable.
 
 Templates are searched next to the running `heroinn` executable first, then in
 the current working directory. Both legacy platform-suffixed names and normal
@@ -113,7 +122,9 @@ and the generator rejects templates containing more than one valid stamp.
 | `heroinn_core` | Shared application-core logic |
 | `heroinn_util` | Protocol, transport, packet, and utility layers |
 | `th3rd/heroinn_ftp` | File manager |
-| `th3rd/alacritty-driver` | Vendored terminal driver used by `heroinn_shell` |
+| `th3rd/heroinn_socks5proxy` | Reverse SOCKS5 proxy GUI and sidecar |
+| `th3rd/heroinn_shell` | Terminal implementation used by `heroinn_shell` |
+| `th3rd/heroinn_conpty` | Vendored Windows ConPTY support |
 
 First-party crates use edition 2024 and share dependency versions pinned at the
 workspace root in `[workspace.dependencies]`. Vendored terminal crates retain
@@ -132,7 +143,7 @@ are welcome. Before opening a pull request, run the same checks used by CI:
 ```sh
 cargo fmt -p heroinn_ftp -- --check
 cargo check --workspace --lib --bins --locked
-cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp --all-targets --locked -- -D warnings
+cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp -p heroinn_socks5proxy --all-targets --locked -- -D warnings
 cargo test --workspace --exclude alacritty_terminal --locked
 cargo test -p alacritty_terminal --lib --locked
 cargo test -p alacritty_config_derive --test config --locked

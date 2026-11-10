@@ -10,6 +10,7 @@ heroinn_util.workspace = true
 heroinn_shell_protocol.workspace = true
 uuid.workspace = true
 log.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }

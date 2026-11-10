@@ -851,6 +851,10 @@ impl HeroinnApp {
                     .body(|mut body| {
                         for info in all_host() {
                             let clientid = info.clientid.clone();
+                            let (socks5_ready, socks5_reason) = match socks5_launch_status(&info) {
+                                Ok(()) => (true, String::new()),
+                                Err(reason) => (false, reason),
+                            };
 
                             let menu = |ui: &mut egui::Ui| {
                                 if ui.button("Shell").clicked() {
@@ -870,6 +874,23 @@ impl HeroinnApp {
                                         }
                                     });
                                     ui.close();
+                                }
+                                let response =
+                                    ui.add_enabled(socks5_ready, egui::Button::new("SOCKS5 Proxy"));
+                                if response.clicked() {
+                                    let clientid = clientid.clone();
+                                    std::thread::spawn(move || {
+                                        if let Err(e) = open_socks5(&clientid) {
+                                            msgbox::error(
+                                                &"SOCKS5 Proxy".to_string(),
+                                                &format!("{}", e),
+                                            );
+                                        }
+                                    });
+                                    ui.close();
+                                }
+                                if !socks5_ready {
+                                    response.on_hover_text(&socks5_reason);
                                 }
                                 let rate_requested = std::cell::Cell::new(false);
                                 ui.menu_button("Setting", |ui| {

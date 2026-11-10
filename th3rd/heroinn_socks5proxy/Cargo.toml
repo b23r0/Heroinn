@@ -1,0 +1,14 @@
+[package]
+name = "heroinn_socks5proxy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+eframe.workspace = true
+chrono.workspace = true
+heroinn_util.workspace = true
+log.workspace = true
+serde_json.workspace = true
+socket2.workspace = true

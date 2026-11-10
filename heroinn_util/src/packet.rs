@@ -38,6 +38,12 @@ pub struct ProxyDisplay {
     pub source: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct HostCapabilities {
+    #[serde(default)]
+    pub socks5_reverse: bool,
+}
+
 /// Host metadata reported by a client when it first connects.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct HostInfo {
@@ -55,6 +61,9 @@ pub struct HostInfo {
     pub system_proxy: Option<ProxyDisplay>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socks5_proxy: Option<ProxyDisplay>,
+    /// Optional additive capabilities reported by current clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<HostCapabilities>,
 }
 
 /// Periodic traffic counters reported by a client.
@@ -151,6 +160,14 @@ impl Message {
     pub fn parse_transfer_rate(&self) -> Result<TransferRate> {
         Ok(serde_json::from_str(&self.data)?)
     }
+
+    pub fn parse_socks5_server_command(&self) -> Result<crate::socks5::Socks5ServerCommand> {
+        Ok(serde_json::from_str(&self.data)?)
+    }
+
+    pub fn parse_socks5_client_event(&self) -> Result<crate::socks5::Socks5ClientEvent> {
+        Ok(serde_json::from_str(&self.data)?)
+    }
 }
 
 #[cfg(test)]
@@ -208,6 +225,9 @@ mod tests {
                 address: "[::1]:1080".to_string(),
                 source: Some("specified".to_string()),
             }),
+            capabilities: Some(HostCapabilities {
+                socks5_reverse: true,
+            }),
         };
         let payload = serde_json::to_vec(&info).unwrap();
         let parsed: HostInfo = serde_json::from_slice(&payload).unwrap();
@@ -252,8 +272,49 @@ mod tests {
             remark: "legacy-platform".to_string(),
             system_proxy: None,
             socks5_proxy: None,
+            capabilities: None,
         };
         let payload = serde_json::to_string(&info).unwrap();
         assert!(!payload.contains("platform_id"));
+    }
+
+    #[test]
+    fn hostinfo_old_packets_default_capabilities_and_old_servers_ignore_them() {
+        let info = HostInfo {
+            ip: "127.0.0.1".to_string(),
+            host_name: "host".to_string(),
+            os: "linux".to_string(),
+            platform_id: Some("linux".to_string()),
+            whoami: "user".to_string(),
+            remark: "new".to_string(),
+            system_proxy: None,
+            socks5_proxy: None,
+            capabilities: Some(HostCapabilities {
+                socks5_reverse: true,
+            }),
+        };
+        let payload = serde_json::to_vec(&info).unwrap();
+        let old: HostInfo = serde_json::from_str(
+            r#"{"ip":"127.0.0.1","host_name":"old","os":"linux","whoami":"u","remark":"old"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.capabilities, None);
+
+        #[derive(Deserialize)]
+        struct LegacyHostInfo {
+            ip: String,
+            host_name: String,
+            os: String,
+            whoami: String,
+            remark: String,
+        }
+        let legacy: LegacyHostInfo = serde_json::from_slice(&payload).unwrap();
+        let _ = (&legacy.ip, &legacy.os, &legacy.whoami, &legacy.remark);
+        assert_eq!(legacy.host_name, "host");
+        assert!(
+            String::from_utf8(payload)
+                .unwrap()
+                .contains("socks5_reverse")
+        );
     }
 }

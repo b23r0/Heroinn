@@ -14,12 +14,12 @@ use std::time::{Duration, Instant};
 
 use native_tls::{TlsConnector, TlsStream};
 
-use crate::Socks5ProxyConfig;
 use crate::error::Result;
+use crate::{Error, Socks5ProxyConfig};
 
 use super::proxy::{
-    Destination, DirectProxyResolver, ProxyEndpoint, ProxyError, ProxyResolver, ProxyRoute,
-    ProxySource, ProxyTransport, SystemProxyResolver, socks5_connect,
+    Destination, DirectProxyResolver, FrozenRoute, ProxyEndpoint, ProxyError, ProxyResolver,
+    ProxyRoute, ProxySource, ProxyTransport, SystemProxyResolver, socks5_connect,
 };
 
 /// Maximum bytes queued for the TLS writer before `write` applies backpressure.
@@ -75,6 +75,7 @@ pub struct OutboundStream {
     writer: Option<OutboundWriter>,
     proxy: Option<ProxyContext>,
     route: RouteReport,
+    frozen: Option<FrozenRoute>,
 }
 
 impl fmt::Debug for OutboundStream {
@@ -94,7 +95,12 @@ impl fmt::Debug for OutboundStream {
 
 impl Clone for OutboundStream {
     fn clone(&self) -> Self {
-        Self::from_inner(self.inner.clone(), self.proxy.clone(), self.route.clone())
+        Self::from_inner(
+            self.inner.clone(),
+            self.proxy.clone(),
+            self.route.clone(),
+            self.frozen.clone(),
+        )
     }
 }
 
@@ -108,6 +114,7 @@ impl OutboundStream {
             })),
             None,
             RouteReport::default(),
+            None,
         ))
     }
 
@@ -136,6 +143,7 @@ impl OutboundStream {
             })),
             None,
             RouteReport::default(),
+            None,
         ))
     }
 
@@ -172,7 +180,12 @@ impl OutboundStream {
         Err(last_error.unwrap_or_else(|| io::Error::other("destination resolved to no addresses")))
     }
 
-    fn from_inner(inner: Arc<Inner>, proxy: Option<ProxyContext>, route: RouteReport) -> Self {
+    fn from_inner(
+        inner: Arc<Inner>,
+        proxy: Option<ProxyContext>,
+        route: RouteReport,
+        frozen: Option<FrozenRoute>,
+    ) -> Self {
         Self {
             reader: Some(OutboundReader {
                 inner: inner.clone(),
@@ -183,6 +196,7 @@ impl OutboundStream {
             inner,
             proxy,
             route,
+            frozen,
         }
     }
 
@@ -233,6 +247,12 @@ impl OutboundStream {
 
     pub fn route_report(&self) -> &RouteReport {
         &self.route
+    }
+
+    /// Exact credential-bearing route used by this connection, suitable for
+    /// pinning later reverse tunnels to the same proxy chain.
+    pub fn frozen_route(&self) -> Option<&FrozenRoute> {
+        self.frozen.as_ref()
     }
 
     pub(crate) fn close_reader(&self) -> OutboundReader {
@@ -1003,6 +1023,62 @@ impl OutboundConnector {
         self.open_with_route(destination, &route)
     }
 
+    /// Open a connection using an already-frozen route. Unlike `open`, this
+    /// performs no proxy discovery and cannot try a different candidate.
+    pub fn open_frozen(
+        &self,
+        destination: &Destination,
+        frozen: &FrozenRoute,
+    ) -> Result<OutboundStream> {
+        if let Some(mut transport) = frozen.connect(destination, self.tls.as_result())? {
+            transport.clear_handshake_timeouts()?;
+            let system_proxy = frozen.system_endpoint_label();
+            let socks5_proxy = frozen.specified_socks5_label();
+            let source = if system_proxy.is_none() {
+                ProxySource::Specified
+            } else {
+                frozen.source().unwrap_or(ProxySource::Specified)
+            };
+            let endpoint = socks5_proxy
+                .clone()
+                .or_else(|| system_proxy.clone())
+                .unwrap_or_else(|| "proxied".to_string());
+            let mut stream = OutboundStream::from_proxy_transport(
+                transport,
+                Some(ProxyContext {
+                    source,
+                    endpoint,
+                    system_proxy: system_proxy.clone(),
+                    system_bypassed: frozen.was_bypassed(),
+                    socks5_proxy: socks5_proxy.clone(),
+                }),
+                RouteReport {
+                    system_proxy,
+                    system_source: frozen.source(),
+                    system_bypassed: frozen.was_bypassed(),
+                    socks5_proxy,
+                },
+            )?;
+            stream.frozen = Some(frozen.clone());
+            return Ok(stream);
+        }
+
+        if !frozen.is_direct() {
+            return Err(Error::Other(
+                "frozen proxy route did not produce a proxy transport".to_string(),
+            ));
+        }
+        let mut stream = OutboundStream::connect_direct(destination)?;
+        stream.route = RouteReport {
+            system_proxy: None,
+            system_source: frozen.source(),
+            system_bypassed: frozen.was_bypassed(),
+            socks5_proxy: None,
+        };
+        stream.frozen = Some(frozen.clone());
+        Ok(stream)
+    }
+
     pub fn open_with_route(
         &self,
         destination: &Destination,
@@ -1020,6 +1096,12 @@ impl OutboundConnector {
                 system_bypassed: route.was_bypassed(),
                 socks5_proxy: None,
             };
+            stream.frozen = Some(FrozenRoute::from_parts(
+                route.source(),
+                None,
+                route.was_bypassed(),
+                None,
+            ));
             return Ok(stream);
         }
         let connected = super::proxy::connect_via_route_with_tls_metadata(
@@ -1027,8 +1109,24 @@ impl OutboundConnector {
             route,
             self.tls.as_result(),
         )?;
-        OutboundStream::from_proxy_transport(
-            connected.transport,
+        let frozen = FrozenRoute::from_parts(
+            route.source(),
+            Some(
+                route
+                    .candidates()
+                    .iter()
+                    .find(|candidate| candidate.safe_label() == connected.endpoint)
+                    .cloned()
+                    .ok_or_else(|| {
+                        Error::Other("selected proxy candidate was not in the route".to_string())
+                    })?,
+            ),
+            false,
+            None,
+        );
+        let transport = connected.transport;
+        let mut stream = OutboundStream::from_proxy_transport(
+            transport,
             Some(ProxyContext {
                 source: connected.source,
                 endpoint: connected.endpoint.clone(),
@@ -1042,7 +1140,9 @@ impl OutboundConnector {
                 system_bypassed: false,
                 socks5_proxy: None,
             },
-        )
+        )?;
+        stream.frozen = Some(frozen);
+        Ok(stream)
     }
 
     fn open_with_specified_socks5(
@@ -1060,6 +1160,12 @@ impl OutboundConnector {
                     proxy_at_endpoint(ProxySource::Specified, &specified_endpoint, error)
                 })?;
             connected.clear_handshake_timeouts()?;
+            let frozen = FrozenRoute::from_parts(
+                system_route.source(),
+                None,
+                system_route.was_bypassed(),
+                Some(specified.clone()),
+            );
             return OutboundStream::from_proxy_transport(
                 connected,
                 Some(ProxyContext {
@@ -1075,7 +1181,11 @@ impl OutboundConnector {
                     system_bypassed: system_route.was_bypassed(),
                     socks5_proxy: Some(specified_endpoint),
                 },
-            );
+            )
+            .map(|mut stream| {
+                stream.frozen = Some(frozen);
+                stream
+            });
         }
 
         let outer_destination = Destination::parse(&specified.authority())?;
@@ -1100,6 +1210,20 @@ impl OutboundConnector {
         connected.transport.clear_handshake_timeouts()?;
 
         let outer_endpoint = connected.endpoint.clone();
+        let system_endpoint = system_route
+            .candidates()
+            .iter()
+            .find(|candidate| candidate.safe_label() == outer_endpoint)
+            .cloned()
+            .ok_or_else(|| {
+                Error::Other("selected outer proxy candidate was not in the route".to_string())
+            })?;
+        let frozen = FrozenRoute::from_parts(
+            system_route.source(),
+            Some(system_endpoint),
+            false,
+            Some(specified.clone()),
+        );
         OutboundStream::from_proxy_transport(
             connected.transport,
             Some(ProxyContext {
@@ -1116,6 +1240,10 @@ impl OutboundConnector {
                 socks5_proxy: Some(specified_endpoint),
             },
         )
+        .map(|mut stream| {
+            stream.frozen = Some(frozen);
+            stream
+        })
     }
 }
 
@@ -1178,6 +1306,14 @@ impl TransportFactory {
 
     pub fn open(&self, destination: &Destination) -> Result<OutboundStream> {
         self.connector.open(destination)
+    }
+
+    pub fn open_frozen(
+        &self,
+        destination: &Destination,
+        frozen: &FrozenRoute,
+    ) -> Result<OutboundStream> {
+        self.connector.open_frozen(destination, frozen)
     }
 
     /// Dial a protocol connection through this factory.
@@ -1325,6 +1461,49 @@ pub(crate) mod tests {
         (address, request_receiver)
     }
 
+    fn spawn_tls_proxy_n(
+        identity: Identity,
+        accepted: Arc<AtomicUsize>,
+        expected_connections: usize,
+    ) -> (SocketAddr, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("TLS proxy listener");
+        let address = listener.local_addr().expect("TLS proxy address");
+        let (request_sender, request_receiver) = mpsc::channel();
+        let acceptor = TlsAcceptor::new(identity).expect("TLS proxy acceptor");
+
+        thread::spawn(move || {
+            for _ in 0..expected_connections {
+                let Ok((stream, _)) = listener.accept() else {
+                    break;
+                };
+                accepted.fetch_add(1, Ordering::SeqCst);
+                let Ok(mut tls) = acceptor.accept(stream) else {
+                    continue;
+                };
+                let request = read_headers(&mut tls);
+                let authority = request
+                    .lines()
+                    .next()
+                    .and_then(|line| line.strip_prefix("CONNECT "))
+                    .and_then(|line| line.split_whitespace().next())
+                    .unwrap_or_default()
+                    .to_string();
+                let _ = request_sender.send(request);
+                if tls
+                    .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    .is_err()
+                {
+                    continue;
+                }
+                thread::spawn(move || {
+                    let _ = relay_tls_proxy(tls, authority);
+                });
+            }
+        });
+
+        (address, request_receiver)
+    }
+
     fn spawn_tls_proxy_closing_after_connect() -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").expect("TLS proxy listener");
         let address = listener.local_addr().expect("TLS proxy address");
@@ -1465,6 +1644,79 @@ pub(crate) mod tests {
         address
     }
 
+    fn spawn_socks_proxy_n(
+        accepted: Arc<AtomicUsize>,
+        expected_connections: usize,
+    ) -> (SocketAddr, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("SOCKS proxy listener");
+        let address = listener.local_addr().unwrap();
+        let (authority_sender, authority_receiver) = mpsc::channel();
+
+        thread::spawn(move || {
+            for _ in 0..expected_connections {
+                let Ok((mut client, _)) = listener.accept() else {
+                    break;
+                };
+                accepted.fetch_add(1, Ordering::SeqCst);
+                let authority_sender = authority_sender.clone();
+                thread::spawn(move || {
+                    let mut greeting = [0u8; 2];
+                    client.read_exact(&mut greeting).unwrap();
+                    let mut methods = vec![0u8; greeting[1] as usize];
+                    client.read_exact(&mut methods).unwrap();
+                    assert!(methods.contains(&0));
+                    client.write_all(&[5, 0]).unwrap();
+
+                    let mut request = [0u8; 4];
+                    client.read_exact(&mut request).unwrap();
+                    assert_eq!(&request[..3], &[5, 1, 0]);
+                    let host = match request[3] {
+                        0x01 => {
+                            let mut octets = [0u8; 4];
+                            client.read_exact(&mut octets).unwrap();
+                            std::net::Ipv4Addr::from(octets).to_string()
+                        }
+                        0x03 => {
+                            let mut length = [0u8; 1];
+                            client.read_exact(&mut length).unwrap();
+                            let mut domain = vec![0u8; length[0] as usize];
+                            client.read_exact(&mut domain).unwrap();
+                            String::from_utf8(domain).unwrap()
+                        }
+                        0x04 => {
+                            let mut octets = [0u8; 16];
+                            client.read_exact(&mut octets).unwrap();
+                            std::net::Ipv6Addr::from(octets).to_string()
+                        }
+                        other => panic!("unexpected ATYP {other}"),
+                    };
+                    let mut port = [0u8; 2];
+                    client.read_exact(&mut port).unwrap();
+                    let authority = format!("{host}:{}", u16::from_be_bytes(port));
+                    let _ = authority_sender.send(authority.clone());
+                    let upstream =
+                        TcpStream::connect(&authority).expect("SOCKS proxy upstream connection");
+                    client
+                        .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 80])
+                        .unwrap();
+
+                    let mut upstream_reader = upstream.try_clone().unwrap();
+                    let mut upstream_writer = upstream;
+                    let mut client_writer = client.try_clone().unwrap();
+                    thread::spawn(move || {
+                        let _ = io::copy(&mut upstream_reader, &mut client_writer);
+                        let _ = client_writer.shutdown(Shutdown::Both);
+                    });
+                    let mut client_reader = client;
+                    let _ = io::copy(&mut client_reader, &mut upstream_writer);
+                    let _ = upstream_writer.shutdown(Shutdown::Both);
+                });
+            }
+        });
+
+        (address, authority_receiver)
+    }
+
     fn spawn_http_proxy(accepted: Arc<AtomicUsize>) -> (SocketAddr, Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("HTTP proxy listener");
         let address = listener.local_addr().unwrap();
@@ -1495,6 +1747,50 @@ pub(crate) mod tests {
             let mut upstream_reader = upstream;
             let _ = io::copy(&mut upstream_reader, &mut client);
             let _ = client.shutdown(Shutdown::Write);
+        });
+        (address, request_receiver)
+    }
+
+    fn spawn_http_proxy_n(
+        accepted: Arc<AtomicUsize>,
+        expected_connections: usize,
+    ) -> (SocketAddr, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("HTTP proxy listener");
+        let address = listener.local_addr().unwrap();
+        let (request_sender, request_receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for _ in 0..expected_connections {
+                let Ok((mut client, _)) = listener.accept() else {
+                    break;
+                };
+                accepted.fetch_add(1, Ordering::SeqCst);
+                let request_sender = request_sender.clone();
+                thread::spawn(move || {
+                    let request = read_headers(&mut client);
+                    let authority = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.strip_prefix("CONNECT "))
+                        .and_then(|line| line.split_whitespace().next())
+                        .unwrap_or_default()
+                        .to_string();
+                    let _ = request_sender.send(request);
+                    let upstream = TcpStream::connect(&authority).expect("HTTP proxy upstream");
+                    client
+                        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                        .unwrap();
+
+                    let mut client_reader = client.try_clone().unwrap();
+                    let mut upstream_writer = upstream.try_clone().unwrap();
+                    thread::spawn(move || {
+                        let _ = io::copy(&mut client_reader, &mut upstream_writer);
+                        let _ = upstream_writer.shutdown(Shutdown::Write);
+                    });
+                    let mut upstream_reader = upstream;
+                    let _ = io::copy(&mut upstream_reader, &mut client);
+                    let _ = client.shutdown(Shutdown::Write);
+                });
+            }
         });
         (address, request_receiver)
     }
@@ -2174,6 +2470,279 @@ pub(crate) mod tests {
             ProxySource::Specified
         );
         assert!(stream.route_report().system_bypassed);
+    }
+
+    fn exercise_frozen_route_tunnel(
+        protocol: crate::HeroinnProtocol,
+        factory: &TransportFactory,
+    ) -> String {
+        let mut tcp_server = None;
+        let mut ws_server = None;
+        let (remote, main) = match protocol {
+            crate::HeroinnProtocol::TCP => {
+                let server = TcpServer::new("127.0.0.1:0", Arc::new(|_| {})).unwrap();
+                let remote = format!("127.0.0.1:{}", server.local_addr().unwrap().port());
+                let main =
+                    crate::protocol::Transport::connect_with_factory(factory, &protocol, &remote)
+                        .expect("TCP main connection through route");
+                tcp_server = Some(server);
+                (remote, main)
+            }
+            crate::HeroinnProtocol::HTTP => {
+                let server = WSServer::new("127.0.0.1:0", Arc::new(|_| {})).unwrap();
+                let remote = format!("127.0.0.1:{}", server.local_addr().unwrap().port());
+                let main =
+                    crate::protocol::Transport::connect_with_factory(factory, &protocol, &remote)
+                        .expect("HTTP main connection through route");
+                ws_server = Some(server);
+                (remote, main)
+            }
+            crate::HeroinnProtocol::UDP => panic!("UDP has no frozen proxy route"),
+        };
+        let frozen = main
+            .frozen_route()
+            .cloned()
+            .expect("main connection must freeze its route");
+        let tunnel_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tunnel_port = tunnel_listener.local_addr().unwrap().port();
+        let mut tunnel = crate::protocol::Transport::tunnel_with_frozen_route(
+            factory,
+            &protocol,
+            &remote,
+            tunnel_port,
+            &frozen,
+        )
+        .expect("frozen-route reverse tunnel");
+        let (mut server_side, _) =
+            TcpConnection::tunnel_server(tunnel_listener, 10).expect("tunnel accept");
+
+        tunnel.send(b"frozen-route-to-server").unwrap();
+        assert_eq!(server_side.recv().unwrap(), b"frozen-route-to-server");
+        server_side.send(b"frozen-route-to-client").unwrap();
+        assert_eq!(tunnel.recv().unwrap(), b"frozen-route-to-client");
+
+        if let Some(mut server) = tcp_server {
+            server.close();
+        }
+        if let Some(mut server) = ws_server {
+            server.close();
+        }
+        remote
+    }
+
+    #[test]
+    fn tcp_and_http_frozen_tunnels_reuse_http_connect_route() {
+        for protocol in [crate::HeroinnProtocol::TCP, crate::HeroinnProtocol::HTTP] {
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let (proxy, requests) = spawn_http_proxy_n(accepted.clone(), 2);
+            let route = proxy::resolve_target_with(
+                "127.0.0.1:1",
+                &ProxyEnvironment {
+                    http_proxy: Some(format!("http://{proxy}")),
+                    ..ProxyEnvironment::default()
+                },
+                None,
+            )
+            .unwrap();
+            let factory = TransportFactory::with_connector(Arc::new(
+                OutboundConnector::with_static_route(route),
+            ));
+            let remote = exercise_frozen_route_tunnel(protocol, &factory);
+            assert_eq!(accepted.load(Ordering::SeqCst), 2);
+            for _ in 0..2 {
+                let request = requests.recv_timeout(Duration::from_secs(3)).unwrap();
+                assert!(request.starts_with(&format!("CONNECT {remote} HTTP/1.1\r\n")));
+            }
+        }
+    }
+
+    #[test]
+    fn tcp_and_http_frozen_tunnels_reuse_direct_route() {
+        for protocol in [crate::HeroinnProtocol::TCP, crate::HeroinnProtocol::HTTP] {
+            let factory = TransportFactory::direct();
+            exercise_frozen_route_tunnel(protocol, &factory);
+        }
+    }
+
+    #[test]
+    fn tcp_and_http_frozen_tunnels_reuse_https_tls_proxy_route() {
+        for protocol in [crate::HeroinnProtocol::TCP, crate::HeroinnProtocol::HTTP] {
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let identity = identity(
+                include_bytes!("../../tests/fixtures/tls/localhost.pem"),
+                include_bytes!("../../tests/fixtures/tls/localhost.key.pem"),
+            );
+            let (proxy, requests) = spawn_tls_proxy_n(identity, accepted.clone(), 2);
+            let route = route_to_https_proxy(proxy.port(), "127.0.0.1:1");
+            let connector = OutboundConnector::with_static_route(route)
+                .with_tls_connector(test_tls_connector());
+            let factory = TransportFactory::with_connector(Arc::new(connector));
+            let remote = exercise_frozen_route_tunnel(protocol, &factory);
+            assert_eq!(accepted.load(Ordering::SeqCst), 2);
+            for _ in 0..2 {
+                let request = requests.recv_timeout(Duration::from_secs(3)).unwrap();
+                assert!(request.starts_with(&format!("CONNECT {remote} HTTP/1.1\r\n")));
+            }
+        }
+    }
+
+    #[test]
+    fn tcp_and_http_frozen_tunnels_reuse_socks5_route() {
+        for protocol in [crate::HeroinnProtocol::TCP, crate::HeroinnProtocol::HTTP] {
+            let accepted = Arc::new(AtomicUsize::new(0));
+            let (proxy, authorities) = spawn_socks_proxy_n(accepted.clone(), 2);
+            let route = route_to_socks_proxy(proxy.port(), "127.0.0.1:1");
+            let factory = TransportFactory::with_connector(Arc::new(
+                OutboundConnector::with_static_route(route),
+            ));
+            let remote = exercise_frozen_route_tunnel(protocol, &factory);
+            assert_eq!(accepted.load(Ordering::SeqCst), 2);
+            for _ in 0..2 {
+                assert_eq!(
+                    authorities.recv_timeout(Duration::from_secs(3)).unwrap(),
+                    remote
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tcp_and_http_frozen_tunnels_reuse_two_layer_system_and_specified_route() {
+        for protocol in [crate::HeroinnProtocol::TCP, crate::HeroinnProtocol::HTTP] {
+            let outer_accepted = Arc::new(AtomicUsize::new(0));
+            let (outer, outer_requests) = spawn_http_proxy_n(outer_accepted.clone(), 2);
+            let inner_accepted = Arc::new(AtomicUsize::new(0));
+            let (inner, inner_authorities) = spawn_socks_proxy_n(inner_accepted.clone(), 2);
+            let config = Socks5ProxyConfig::new("127.0.0.1", inner.port()).unwrap();
+            let route = proxy::resolve_target_with(
+                "127.0.0.1:1",
+                &ProxyEnvironment {
+                    http_proxy: Some(format!("http://{outer}")),
+                    ..ProxyEnvironment::default()
+                },
+                None,
+            )
+            .unwrap();
+            let connector = OutboundConnector::with_static_route(route)
+                .with_specified_socks5(&config)
+                .unwrap();
+            let factory = TransportFactory::with_connector(Arc::new(connector));
+            let remote = exercise_frozen_route_tunnel(protocol, &factory);
+            assert_eq!(outer_accepted.load(Ordering::SeqCst), 2);
+            assert_eq!(inner_accepted.load(Ordering::SeqCst), 2);
+            for _ in 0..2 {
+                let request = outer_requests.recv_timeout(Duration::from_secs(3)).unwrap();
+                assert!(request.starts_with(&format!("CONNECT {inner} HTTP/1.1\r\n")));
+                assert_eq!(
+                    inner_authorities
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap(),
+                    remote
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tcp_and_http_frozen_tunnels_reuse_no_proxy_bypass_route() {
+        for protocol in [crate::HeroinnProtocol::TCP, crate::HeroinnProtocol::HTTP] {
+            let outer = TcpListener::bind("127.0.0.1:0").unwrap();
+            outer.set_nonblocking(true).unwrap();
+            let inner_accepted = Arc::new(AtomicUsize::new(0));
+            let (inner, inner_authorities) = spawn_socks_proxy_n(inner_accepted.clone(), 2);
+            let config = Socks5ProxyConfig::new("127.0.0.1", inner.port()).unwrap();
+            let route = proxy::resolve_target_with(
+                "127.0.0.1:1",
+                &ProxyEnvironment {
+                    http_proxy: Some(format!("http://{}", outer.local_addr().unwrap())),
+                    no_proxy: Some("127.0.0.1".to_string()),
+                    ..ProxyEnvironment::default()
+                },
+                None,
+            )
+            .unwrap();
+            assert!(route.was_bypassed());
+            let connector = OutboundConnector::with_static_route(route)
+                .with_specified_socks5(&config)
+                .unwrap();
+            let factory = TransportFactory::with_connector(Arc::new(connector));
+            let remote = exercise_frozen_route_tunnel(protocol, &factory);
+            assert_eq!(inner_accepted.load(Ordering::SeqCst), 2);
+            for _ in 0..2 {
+                assert_eq!(
+                    inner_authorities
+                        .recv_timeout(Duration::from_secs(3))
+                        .unwrap(),
+                    remote
+                );
+            }
+            assert!(
+                outer.accept().is_err(),
+                "bypassed outer proxy received a frozen reverse tunnel"
+            );
+        }
+    }
+
+    #[test]
+    fn tcp_and_http_frozen_tunnels_reuse_direct_no_proxy_bypass_route() {
+        for protocol in [crate::HeroinnProtocol::TCP, crate::HeroinnProtocol::HTTP] {
+            let outer = TcpListener::bind("127.0.0.1:0").unwrap();
+            outer.set_nonblocking(true).unwrap();
+            let route = proxy::resolve_target_with(
+                "127.0.0.1:1",
+                &ProxyEnvironment {
+                    http_proxy: Some(format!("http://{}", outer.local_addr().unwrap())),
+                    no_proxy: Some("127.0.0.1".to_string()),
+                    ..ProxyEnvironment::default()
+                },
+                None,
+            )
+            .unwrap();
+            assert!(route.was_bypassed());
+            let factory = TransportFactory::with_connector(Arc::new(
+                OutboundConnector::with_static_route(route),
+            ));
+            exercise_frozen_route_tunnel(protocol, &factory);
+            assert!(
+                outer.accept().is_err(),
+                "bypassed outer proxy received a direct frozen reverse tunnel"
+            );
+        }
+    }
+
+    #[test]
+    fn frozen_route_never_rediscovers_or_falls_back_to_direct() {
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let target = target_listener.local_addr().unwrap();
+        let proxy_accepted = Arc::new(AtomicUsize::new(0));
+        let (proxy, _request) = spawn_http_proxy(proxy_accepted.clone());
+        let route = proxy::resolve_target_with(
+            &target.to_string(),
+            &ProxyEnvironment {
+                http_proxy: Some(format!("http://{proxy}")),
+                ..ProxyEnvironment::default()
+            },
+            None,
+        )
+        .unwrap();
+        let connector = OutboundConnector::with_static_route(route);
+        let main = connector
+            .open(&Destination::parse(&target.to_string()).unwrap())
+            .unwrap();
+        let (first_target, _) = target_listener.accept().unwrap();
+        drop(first_target);
+        let frozen = main.frozen_route().cloned().expect("frozen route");
+        drop(main);
+        assert_eq!(proxy_accepted.load(Ordering::SeqCst), 1);
+
+        let error = connector
+            .open_frozen(&Destination::parse(&target.to_string()).unwrap(), &frozen)
+            .unwrap_err();
+        assert!(matches!(error, crate::Error::Proxy(_)));
+
+        target_listener.set_nonblocking(true).unwrap();
+        assert!(target_listener.accept().is_err());
+        assert_eq!(proxy_accepted.load(Ordering::SeqCst), 1);
     }
 
     #[test]

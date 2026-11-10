@@ -101,6 +101,7 @@ jobs:
           -p heroinn_core
           -p heroinn_util
           -p heroinn_ftp
+          -p heroinn_socks5proxy
           --all-targets
           --locked
           -- -D warnings

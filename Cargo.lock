@@ -2319,6 +2319,7 @@ dependencies = [
  "log 0.4.35",
  "profiling",
  "rfd",
+ "serde_json",
  "simple_logger",
 ]
 
@@ -2348,6 +2349,7 @@ dependencies = [
  "heroinn_util",
  "libc 0.2.191",
  "log 0.4.35",
+ "serde_json",
  "uuid",
  "windows 0.39.0",
 ]
@@ -2400,6 +2402,18 @@ dependencies = [
 [[package]]
 name = "heroinn_shell_protocol"
 version = "0.1.0"
+
+[[package]]
+name = "heroinn_socks5proxy"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "eframe",
+ "heroinn_util",
+ "log 0.4.35",
+ "serde_json",
+ "socket2",
+]
 
 [[package]]
 name = "heroinn_util"

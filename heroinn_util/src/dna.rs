@@ -16,9 +16,11 @@ pub const CLIENT_CAPABILITY_FLAG: [u8; 8] = *b"HRNNCAP1";
 pub const CLIENT_CAPABILITY_VERSION: u16 = 1;
 /// Feature bit: the client parses and uses `ConnectionInfo::socks5_proxy`.
 pub const CLIENT_FEATURE_SOCKS5_PROXY: u32 = 1;
+/// Feature bit: the client supports server-initiated reverse SOCKS5 streams.
+pub const CLIENT_FEATURE_SOCKS5_REVERSE: u32 = 2;
 /// Complete, versioned capability record embedded in every current client template.
 pub const CLIENT_CAPABILITY_MARKER: [u8; 16] = [
-    b'H', b'R', b'N', b'N', b'C', b'A', b'P', b'1', 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x5a, 0xa5,
+    b'H', b'R', b'N', b'N', b'C', b'A', b'P', b'1', 0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x5a, 0xa5,
 ];
 
 /// Copy the client template to `new_path`, replacing its connection stamp.

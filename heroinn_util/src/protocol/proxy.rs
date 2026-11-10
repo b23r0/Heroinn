@@ -498,6 +498,144 @@ impl ProxyRoute {
     }
 }
 
+/// Immutable, credential-bearing route snapshot used by later reverse tunnels.
+///
+/// The snapshot records the one system candidate that actually succeeded and
+/// the optional client-specified SOCKS5 hop. It never re-discovers candidates,
+/// and it cannot fall back to a different proxy or a direct connection.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FrozenRoute {
+    source: Option<ProxySource>,
+    system_endpoint: Option<ProxyEndpoint>,
+    bypassed: bool,
+    specified_socks5: Option<ProxyEndpoint>,
+}
+
+impl fmt::Debug for FrozenRoute {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FrozenRoute")
+            .field("source", &self.source)
+            .field("system_endpoint", &self.system_endpoint)
+            .field("bypassed", &self.bypassed)
+            .field("specified_socks5", &self.specified_socks5)
+            .finish()
+    }
+}
+
+impl FrozenRoute {
+    pub fn direct() -> Self {
+        Self {
+            source: None,
+            system_endpoint: None,
+            bypassed: false,
+            specified_socks5: None,
+        }
+    }
+
+    pub(crate) fn from_parts(
+        source: Option<ProxySource>,
+        system_endpoint: Option<ProxyEndpoint>,
+        bypassed: bool,
+        specified_socks5: Option<ProxyEndpoint>,
+    ) -> Self {
+        Self {
+            source,
+            system_endpoint,
+            bypassed,
+            specified_socks5,
+        }
+    }
+
+    pub fn source(&self) -> Option<ProxySource> {
+        self.source
+    }
+
+    pub fn was_bypassed(&self) -> bool {
+        self.bypassed
+    }
+
+    pub fn system_endpoint_label(&self) -> Option<String> {
+        self.system_endpoint.as_ref().map(ProxyEndpoint::safe_label)
+    }
+
+    pub fn specified_socks5_label(&self) -> Option<String> {
+        self.specified_socks5
+            .as_ref()
+            .map(ProxyEndpoint::safe_label)
+    }
+
+    pub fn is_direct(&self) -> bool {
+        self.system_endpoint.is_none() && self.specified_socks5.is_none()
+    }
+
+    /// Open the exact frozen chain. `None` means the caller should connect
+    /// directly; every proxy error is returned without trying another route.
+    pub(crate) fn connect(
+        &self,
+        target: &Target,
+        tls: std::result::Result<&TlsConnector, &str>,
+    ) -> Result<Option<ProxyTransport>> {
+        match (&self.system_endpoint, &self.specified_socks5) {
+            (Some(system), Some(specified)) => {
+                let outer = Target::parse(&specified.authority())?;
+                let mut connected = system.connect(&outer, tls).map_err(|error| {
+                    crate::Error::Proxy(ProxyError::ProxyAtEndpoint {
+                        source_kind: self.source,
+                        endpoint: system.safe_label(),
+                        source: Box::new(as_proxy_error(error)),
+                    })
+                })?;
+                match &mut connected {
+                    ProxyTransport::Plain(stream) => socks5_connect(stream, specified, target),
+                    ProxyTransport::Tls(stream) => {
+                        socks5_connect(stream.as_mut(), specified, target)
+                    }
+                }
+                .map_err(|error| {
+                    crate::Error::Proxy(ProxyError::ProxyAtEndpoint {
+                        source_kind: Some(ProxySource::Specified),
+                        endpoint: specified.safe_label(),
+                        source: Box::new(as_proxy_error(error)),
+                    })
+                })?;
+                connected.clear_handshake_timeouts()?;
+                Ok(Some(connected))
+            }
+            (None, Some(specified)) => {
+                let mut connected = specified.connect(target, tls).map_err(|error| {
+                    crate::Error::Proxy(ProxyError::ProxyAtEndpoint {
+                        source_kind: Some(ProxySource::Specified),
+                        endpoint: specified.safe_label(),
+                        source: Box::new(as_proxy_error(error)),
+                    })
+                })?;
+                connected.clear_handshake_timeouts()?;
+                Ok(Some(connected))
+            }
+            (Some(system), None) => {
+                let mut connected = system.connect(target, tls).map_err(|error| {
+                    crate::Error::Proxy(ProxyError::ProxyAtEndpoint {
+                        source_kind: self.source,
+                        endpoint: system.safe_label(),
+                        source: Box::new(as_proxy_error(error)),
+                    })
+                })?;
+                connected.clear_handshake_timeouts()?;
+                Ok(Some(connected))
+            }
+            (None, None) => Ok(None),
+        }
+    }
+}
+
+fn as_proxy_error(error: crate::Error) -> ProxyError {
+    match error {
+        crate::Error::Proxy(error) => error,
+        error => ProxyError::Handshake(error.to_string()),
+    }
+}
+
 /// Explicit proxy values read from the process environment.
 #[derive(Clone, Default)]
 pub struct ProxyEnvironment {

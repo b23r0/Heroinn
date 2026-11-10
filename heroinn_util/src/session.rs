@@ -88,6 +88,12 @@ impl<T: Session> SessionManager<T> {
         self.sessions.contains_key(id)
     }
 
+    pub fn contains_clientid(&self, clientid: &str) -> bool {
+        self.sessions
+            .values()
+            .any(|session| session.clientid() == clientid && session.alive())
+    }
+
     /// Close and remove one session after a write failure.
     pub fn close(&mut self, id: &str) {
         if let Some(mut session) = self.sessions.remove(id) {
