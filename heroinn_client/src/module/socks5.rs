@@ -689,4 +689,36 @@ mod tests {
         manager.close_all();
         server.close();
     }
+
+    #[test]
+    fn failures_are_classified_without_collapsing_distinct_causes() {
+        assert_eq!(
+            classify_error(&Error::Timeout),
+            Socks5FailureCategory::Timeout
+        );
+        assert_eq!(
+            classify_error(&Error::NotFound("dns".to_string())),
+            Socks5FailureCategory::TargetDns
+        );
+        assert_eq!(
+            classify_error(&Error::Malformed("bad")),
+            Socks5FailureCategory::Protocol
+        );
+        assert_eq!(
+            classify_error(&Error::Other("internal".to_string())),
+            Socks5FailureCategory::Internal
+        );
+        assert_eq!(
+            classify_error(&Error::Io(std::io::Error::from(
+                std::io::ErrorKind::ConnectionRefused
+            ))),
+            Socks5FailureCategory::Rejected
+        );
+        assert_eq!(
+            classify_error(&Error::Io(std::io::Error::from(
+                std::io::ErrorKind::ConnectionReset
+            ))),
+            Socks5FailureCategory::TargetConnect
+        );
+    }
 }

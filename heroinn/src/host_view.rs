@@ -309,6 +309,7 @@ fn sanitize_tooltip_os(os: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::egui;
     use std::collections::HashSet;
 
     fn info(platform_id: Option<&str>, os: &str) -> HostInfo {
@@ -456,5 +457,26 @@ mod tests {
         let host = info(Some("linux"), "Linux");
         assert_eq!(HostPlatform::from_info(&host), HostPlatform::Linux);
         assert!(!format!("{:?}", host).contains("password"));
+    }
+
+    #[test]
+    fn platform_icons_render_headlessly_for_every_platform_and_theme() {
+        for (platform_id, os) in [
+            (Some("linux"), "Ubuntu 24.04"),
+            (Some("windows"), "Windows 11"),
+            (Some("freebsd"), "FreeBSD 14"),
+            (None, "Plan 9"),
+        ] {
+            for dark in [false, true] {
+                let context = egui::Context::default();
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    ui.visuals_mut().dark_mode = dark;
+                    let response = draw_host_platform_icon(ui, &info(platform_id, os));
+                    assert_eq!(response.rect.width(), HOST_ICON_SIZE);
+                    assert_eq!(response.rect.height(), HOST_ICON_SIZE);
+                });
+                output.textures_delta.clear();
+            }
+        }
     }
 }

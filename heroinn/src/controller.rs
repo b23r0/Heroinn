@@ -497,3 +497,341 @@ fn open_socks5_inner(clientid: &str) -> Result<()> {
     log::info!("create SOCKS5 session {session_id} for {clientid}");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::MutexGuard;
+
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn serial() -> MutexGuard<'static, ()> {
+        TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn host_info(clientid: &str) -> HostInfo {
+        HostInfo {
+            ip: "127.0.0.1".to_string(),
+            host_name: format!("host-{clientid}"),
+            os: "linux".to_string(),
+            platform_id: Some("linux".to_string()),
+            whoami: "tester".to_string(),
+            remark: clientid.to_string(),
+            system_proxy: None,
+            socks5_proxy: None,
+            capabilities: Some(heroinn_util::packet::HostCapabilities {
+                socks5_reverse: true,
+            }),
+        }
+    }
+
+    fn ui_host(
+        clientid: &str,
+        proto: HeroinnProtocol,
+        system_proxy: Option<heroinn_util::packet::ProxyDisplay>,
+        socks5_proxy: Option<heroinn_util::packet::ProxyDisplay>,
+    ) -> UIHostInfo {
+        UIHostInfo {
+            clientid: clientid.to_string(),
+            peer_addr: "127.0.0.1:39000".parse().unwrap(),
+            proto,
+            in_rate: 0,
+            out_rate: 0,
+            transfer_rate: DEFAULT_TRANSFER_RATE,
+            last_heartbeat: 0,
+            info: HostInfo {
+                system_proxy,
+                socks5_proxy,
+                ..host_info(clientid)
+            },
+        }
+    }
+
+    fn hostinfo_message(clientid: &str, info: HostInfo) -> Message {
+        hostinfo_message_at(clientid, info, 39000)
+    }
+
+    fn hostinfo_message_at(clientid: &str, info: HostInfo, port: u16) -> Message {
+        let bytes = Message::build(HeroinnClientMsgID::HostInfo.to_u8(), clientid, info).unwrap();
+        Message::new(
+            format!("127.0.0.1:{port}").parse().unwrap(),
+            HeroinnProtocol::TCP,
+            &bytes,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn hostinfo_upsert_preserves_transfer_rate_and_heartbeat_updates_rates() {
+        let _guard = serial();
+        let clientid = "controller-upsert";
+        remove_host(clientid.to_string());
+
+        cb_msg(hostinfo_message(clientid, host_info(clientid)));
+        set_transfer_rate(clientid, 4096).unwrap();
+        cb_msg(hostinfo_message(clientid, host_info(clientid)));
+        let stored = get_hostinfo_by_clientid(clientid).unwrap();
+        assert_eq!(stored.transfer_rate, 4096);
+
+        let heartbeat = heroinn_util::packet::Heartbeat {
+            time: 1,
+            in_rate: 12,
+            out_rate: 34,
+        };
+        let bytes =
+            Message::build(HeroinnClientMsgID::Heartbeat.to_u8(), clientid, heartbeat).unwrap();
+        cb_msg(
+            Message::new(
+                "127.0.0.1:39000".parse().unwrap(),
+                HeroinnProtocol::TCP,
+                &bytes,
+            )
+            .unwrap(),
+        );
+        let stored = get_hostinfo_by_clientid(clientid).unwrap();
+        assert_eq!(stored.in_rate, 12);
+        assert_eq!(stored.out_rate, 34);
+        assert!(stored.last_heartbeat > 0);
+        remove_host(clientid.to_string());
+    }
+
+    #[test]
+    fn heartbeat_for_unknown_host_has_no_side_effect() {
+        let _guard = serial();
+        let clientid = "controller-unknown-heartbeat";
+        remove_host(clientid.to_string());
+        let bytes = Message::build(
+            HeroinnClientMsgID::Heartbeat.to_u8(),
+            clientid,
+            heroinn_util::packet::Heartbeat {
+                time: 1,
+                in_rate: 1,
+                out_rate: 1,
+            },
+        )
+        .unwrap();
+        cb_msg(
+            Message::new(
+                "127.0.0.1:39001".parse().unwrap(),
+                HeroinnProtocol::TCP,
+                &bytes,
+            )
+            .unwrap(),
+        );
+        assert!(get_hostinfo_by_clientid(clientid).is_none());
+    }
+
+    #[test]
+    fn malformed_and_unknown_messages_do_not_create_hosts() {
+        let _guard = serial();
+        let clientid = "controller-malformed";
+        remove_host(clientid.to_string());
+        let malformed = Message::build(
+            HeroinnClientMsgID::HostInfo.to_u8(),
+            clientid,
+            "not-a-host-info",
+        )
+        .unwrap();
+        cb_msg(
+            Message::new(
+                "127.0.0.1:39002".parse().unwrap(),
+                HeroinnProtocol::TCP,
+                &malformed,
+            )
+            .unwrap(),
+        );
+        let unknown = Message::build(0xfe, clientid, "ignored").unwrap();
+        cb_msg(
+            Message::new(
+                "127.0.0.1:39002".parse().unwrap(),
+                HeroinnProtocol::TCP,
+                &unknown,
+            )
+            .unwrap(),
+        );
+        assert!(get_hostinfo_by_clientid(clientid).is_none());
+    }
+
+    #[test]
+    fn disconnect_removes_only_the_matching_endpoint_and_closes_once() {
+        let _guard = serial();
+        let first = "controller-disconnect-first";
+        let second = "controller-disconnect-second";
+        remove_host(first.to_string());
+        remove_host(second.to_string());
+        cb_msg(hostinfo_message_at(first, host_info(first), 39000));
+        cb_msg(hostinfo_message_at(second, host_info(second), 39001));
+
+        on_client_disconnected("127.0.0.1:39000".parse().unwrap(), HeroinnProtocol::TCP);
+        on_client_disconnected("127.0.0.1:39000".parse().unwrap(), HeroinnProtocol::TCP);
+
+        assert!(get_hostinfo_by_clientid(first).is_none());
+        assert!(get_hostinfo_by_clientid(second).is_some());
+        remove_host(second.to_string());
+    }
+
+    #[test]
+    fn transfer_rate_rejects_zero_missing_hosts_and_preserves_last_value() {
+        let _guard = serial();
+        let clientid = "controller-rate";
+        remove_host(clientid.to_string());
+        assert!(matches!(
+            set_transfer_rate(clientid, 0),
+            Err(Error::Other(message)) if message.contains("greater than zero")
+        ));
+        assert!(matches!(
+            set_transfer_rate(clientid, 1024),
+            Err(Error::NotFound(message)) if message.contains(clientid)
+        ));
+        cb_msg(hostinfo_message(clientid, host_info(clientid)));
+        set_transfer_rate(clientid, 2048).unwrap();
+        assert_eq!(
+            get_hostinfo_by_clientid(clientid).unwrap().transfer_rate,
+            2048
+        );
+        remove_host(clientid.to_string());
+    }
+
+    #[test]
+    fn opening_sessions_or_socks_for_unknown_clients_is_a_clean_error() {
+        let _guard = serial();
+        let clientid = "controller-no-client";
+        remove_host(clientid.to_string());
+        assert!(matches!(open_shell(clientid), Err(Error::NotFound(_))));
+        assert!(matches!(open_ftp(clientid), Err(Error::NotFound(_))));
+        assert!(matches!(open_socks5(clientid), Err(Error::NotFound(_))));
+        assert!(!G_SOCKS5_STARTING.lock().unwrap().contains(clientid));
+    }
+
+    #[test]
+    fn duplicate_socks_start_is_rejected_and_the_guard_is_released() {
+        let _guard = serial();
+        let clientid = "controller-socks-starting";
+        G_SOCKS5_STARTING
+            .lock()
+            .unwrap()
+            .insert(clientid.to_string());
+        let error = open_socks5(clientid).unwrap_err();
+        assert!(error.to_string().contains("already starting"));
+        G_SOCKS5_STARTING.lock().unwrap().remove(clientid);
+        assert!(!G_SOCKS5_STARTING.lock().unwrap().contains(clientid));
+    }
+
+    #[test]
+    fn launch_status_rejects_clients_without_the_reverse_capability() {
+        let mut host = ui_host("controller-capability", HeroinnProtocol::TCP, None, None);
+        host.info.capabilities = None;
+        let error = socks5_launch_status(&host).unwrap_err();
+        assert!(error.contains("does not advertise reverse SOCKS5"));
+        host.info.capabilities = Some(heroinn_util::packet::HostCapabilities {
+            socks5_reverse: false,
+        });
+        assert!(socks5_launch_status(&host).is_err());
+    }
+
+    #[test]
+    fn chain_label_is_redacted_complete_and_explicit_for_udp() {
+        let display = |protocol: &str, address: &str| heroinn_util::packet::ProxyDisplay {
+            protocol: protocol.to_string(),
+            address: address.to_string(),
+            source: None,
+        };
+
+        let udp = ui_host("chain-udp", HeroinnProtocol::UDP, None, None);
+        assert_eq!(
+            socks5_chain_label(&udp),
+            "UDP direct / proxy chain not applicable"
+        );
+
+        let direct = ui_host("chain-direct", HeroinnProtocol::TCP, None, None);
+        assert_eq!(socks5_chain_label(&direct), "Direct");
+        let bypass = ui_host(
+            "chain-bypass",
+            HeroinnProtocol::HTTP,
+            Some(display("Bypassed", "ignored.example:1")),
+            Some(display("Disabled", "")),
+        );
+        assert_eq!(socks5_chain_label(&bypass), "Bypassed");
+        let layered = ui_host(
+            "chain-layered",
+            HeroinnProtocol::TCP,
+            Some(display("HTTPS", "system.example:8443")),
+            Some(display("SOCKS5", "specified.example:1080")),
+        );
+        assert_eq!(
+            socks5_chain_label(&layered),
+            "HTTPS system.example:8443 -> SOCKS5 specified.example:1080"
+        );
+        let protocol_only = ui_host(
+            "chain-protocol",
+            HeroinnProtocol::TCP,
+            Some(display("HTTP", "")),
+            Some(display("SOCKS5", "")),
+        );
+        assert_eq!(socks5_chain_label(&protocol_only), "HTTP -> SOCKS5");
+    }
+
+    #[test]
+    fn listeners_get_ids_are_visible_and_remove_is_idempotent() {
+        let _guard = serial();
+        let id = add_listener(&HeroinnProtocol::TCP, 0).unwrap();
+        let listener = all_listener().into_iter().find(|item| item.id == id);
+        assert!(listener.is_some());
+        assert_eq!(listener.unwrap().protocol, HeroinnProtocol::TCP);
+        remove_listener(id).unwrap();
+        assert!(matches!(remove_listener(id), Err(Error::NotFound(_))));
+    }
+
+    #[test]
+    fn sending_to_an_unknown_client_is_a_noop() {
+        let _guard = serial();
+        send_data_by_clientid("controller-unknown-send", b"payload").unwrap();
+    }
+
+    #[test]
+    fn a_bound_listener_can_send_to_a_known_host() {
+        let _guard = serial();
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+        let id = add_listener(&HeroinnProtocol::TCP, addr.port()).unwrap();
+        let clientid = "controller-live-send";
+        remove_host(clientid.to_string());
+        let host = host_info(clientid);
+        let bytes = Message::build(HeroinnClientMsgID::HostInfo.to_u8(), clientid, host).unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        heroinn_util::protocol::frame::write_frame(&mut client, &bytes).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while get_hostinfo_by_clientid(clientid).is_none() && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(get_hostinfo_by_clientid(clientid).is_some());
+        send_data_by_clientid(clientid, b"payload").unwrap();
+        use std::io::Read;
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let payload = loop {
+            let mut response = [0u8; 4];
+            client.read_exact(&mut response).unwrap();
+            let size = u32::from_be_bytes(response) as usize;
+            let mut payload = vec![0u8; size];
+            client.read_exact(&mut payload).unwrap();
+            if payload == b"payload" {
+                break payload;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "payload was not observed before the deadline"
+            );
+        };
+        assert_eq!(payload, b"payload");
+        remove_host(clientid.to_string());
+        remove_listener(id).unwrap();
+        drop(client);
+    }
+}

@@ -510,3 +510,401 @@ pub fn upload_file(sender: &Sender<FTPPacket>, local_path: &str, remote_path: &s
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc::{Receiver, channel};
+    use std::sync::{Mutex, MutexGuard};
+
+    use super::*;
+
+    static RPC_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_test_id() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .wrapping_add(u128::from(NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)))
+    }
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "heroinn-ftp-controller-{}-{}",
+                std::process::id(),
+                unique_test_id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn serial() -> MutexGuard<'static, ()> {
+        RPC_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn respond_once(
+        receiver: Receiver<FTPPacket>,
+        expected_name: &'static str,
+        retcode: i32,
+        data: Vec<String>,
+        message: &'static str,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let packet = receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(packet.id().unwrap(), FTPId::RPC);
+            let request = RpcMessage::parse(&packet.data).unwrap();
+            assert_eq!(request.name, expected_name);
+            let mut response = RpcMessage {
+                id: request.id,
+                name: request.name,
+                retcode,
+                time: request.time,
+                msg: message.to_string(),
+                data,
+            };
+            response.time = cur_timestamp_secs();
+            G_RPCCLIENT.write(&response);
+        })
+    }
+
+    fn file_info(name: &str, typ: &str) -> FileInfo {
+        FileInfo {
+            name: name.to_string(),
+            size: 3,
+            typ: typ.to_string(),
+            last_modified: "2026-01-01 00:00:00".to_string(),
+        }
+    }
+
+    #[test]
+    fn ftp_rpc_packet_uses_the_rpc_id_and_serialized_message() {
+        let request = RpcMessage::build_call("name", vec!["value".to_string()]);
+        let packet = build_ftp_rpc_packet(&request).unwrap();
+        assert_eq!(packet.id, FTPId::RPC.to_u8());
+        let decoded = RpcMessage::parse(&packet.data).unwrap();
+        assert_eq!(decoded.id, request.id);
+        assert_eq!(decoded.name, "name");
+        assert_eq!(decoded.data, ["value"]);
+    }
+
+    #[test]
+    fn send_packet_reports_a_closed_session_channel() {
+        let (sender, receiver) = channel();
+        drop(receiver);
+        let error = send_ftp_packet(
+            &sender,
+            FTPPacket {
+                id: FTPId::Close.to_u8(),
+                data: vec![],
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("sender ftp packet failed"));
+    }
+
+    #[test]
+    fn remote_discovery_and_folder_rpc_decode_entries_and_propagate_errors() {
+        let _guard = serial();
+        let (sender, receiver) = channel();
+        let response = vec![
+            file_info("disk", "SSD").serialize().unwrap(),
+            file_info("folder", "FOLDER").serialize().unwrap(),
+        ];
+        let worker = respond_once(receiver, "get_disk_info", 0, response, "");
+        let entries = get_remote_disk_info(&sender).unwrap();
+        worker.join().unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].name, "disk");
+
+        let (sender, receiver) = channel();
+        let response = vec![file_info("remote", "FILE").serialize().unwrap()];
+        let worker = respond_once(receiver, "get_folder_info", 0, response, "");
+        let entries = get_remote_folder_info(&sender, "/tmp").unwrap();
+        worker.join().unwrap();
+        assert_eq!(entries[0].name, "remote");
+
+        let (sender, receiver) = channel();
+        let worker = respond_once(receiver, "get_folder_info", 3, vec![], "denied");
+        let error = get_remote_folder_info(&sender, "/denied").unwrap_err();
+        worker.join().unwrap();
+        assert!(error.to_string().contains("denied"));
+    }
+
+    #[test]
+    fn remote_join_and_delete_propagate_success_and_failure() {
+        let _guard = serial();
+        let (sender, receiver) = channel();
+        let worker = respond_once(
+            receiver,
+            "join_path",
+            0,
+            vec!["/remote/file".to_string()],
+            "",
+        );
+        assert_eq!(
+            get_remote_join_path(&sender, "/remote", "file").unwrap(),
+            "/remote/file"
+        );
+        worker.join().unwrap();
+
+        let (sender, receiver) = channel();
+        let worker = respond_once(receiver, "remove_file", 2, vec![], "remove denied");
+        let error = delete_remote_file(&sender, "/remote/file").unwrap_err();
+        worker.join().unwrap();
+        assert!(error.to_string().contains("remove denied"));
+
+        let (sender, receiver) = channel();
+        let worker = respond_once(receiver, "remove_file", 0, vec![], "");
+        delete_remote_file(&sender, "/remote/file").unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn local_discovery_join_listing_and_delete_use_the_local_filesystem() {
+        let dir = TestDir::new();
+        let folder = dir.0.join("folder");
+        fs::create_dir(&folder).unwrap();
+        let file = folder.join("file.txt");
+        fs::write(&file, b"abc").unwrap();
+
+        let disks = get_local_disk_info().unwrap();
+        assert!(!disks.is_empty());
+        let entries = get_local_folder_info(&folder.to_string_lossy()).unwrap();
+        assert!(entries.iter().any(|entry| entry.name == "file.txt"));
+        let joined = get_remote_join_path_for_test(&dir.0, "folder", "file.txt");
+        assert!(joined.ends_with("folder/file.txt") || joined.ends_with("folder\\file.txt"));
+
+        delete_local_file(&file.to_string_lossy()).unwrap();
+        assert!(!file.exists());
+        assert!(get_local_folder_info(&folder.to_string_lossy()).is_ok());
+    }
+
+    fn get_remote_join_path_for_test(root: &std::path::Path, first: &str, second: &str) -> String {
+        heroinn_util::ftp::method::join_path(vec![
+            root.join(first).to_string_lossy().into_owned(),
+            second.to_string(),
+        ])
+        .unwrap()
+        .remove(0)
+    }
+
+    #[test]
+    fn local_errors_are_returned_instead_of_panicking() {
+        let missing =
+            std::env::temp_dir().join(format!("heroinn-ftp-missing-{}", unique_test_id()));
+        assert!(get_local_folder_info(&missing.to_string_lossy()).is_err());
+        assert!(delete_local_file(&missing.to_string_lossy()).is_err());
+    }
+
+    fn wait_until(timeout: std::time::Duration, mut predicate: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if predicate() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        predicate()
+    }
+
+    fn rpc_response(request: &RpcMessage, retcode: i32, data: Vec<String>, message: &str) {
+        let response = RpcMessage {
+            id: request.id.clone(),
+            name: request.name.clone(),
+            retcode,
+            time: cur_timestamp_secs(),
+            msg: message.to_string(),
+            data,
+        };
+        G_RPCCLIENT.write(&response);
+    }
+
+    fn spawn_download_responder(
+        receiver: Receiver<FTPPacket>,
+        expected_rpc: &'static str,
+        expected_data: Vec<String>,
+        remote_path: &'static str,
+        payload: &'static [u8],
+        expected_start: u64,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let packet = receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(packet.id().unwrap(), FTPId::RPC);
+            let request = RpcMessage::parse(&packet.data).unwrap();
+            assert_eq!(request.name, expected_rpc);
+            rpc_response(&request, 0, expected_data, "");
+
+            let packet = receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(packet.id().unwrap(), FTPId::Get);
+            let request = TunnelRequest::parse(&packet.data).unwrap();
+            let mut tunnel =
+                TcpConnection::connect(&format!("127.0.0.1:{}", request.port)).unwrap();
+            let header = FTPGetHeader::parse(&tunnel.recv().unwrap()).unwrap();
+            assert_eq!(header.path, remote_path);
+            assert_eq!(header.start_pos, expected_start);
+            tunnel.send(&payload[expected_start as usize..]).unwrap();
+            tunnel.close();
+        })
+    }
+
+    #[test]
+    fn download_file_creates_the_target_and_writes_all_frames() {
+        let _guard = serial();
+        let dir = TestDir::new();
+        let local = dir.0.join("download.bin");
+        let local_string = local.to_string_lossy().into_owned();
+        let payload = b"download payload";
+        let (sender, receiver) = channel();
+        let responder = spawn_download_responder(
+            receiver,
+            "file_size",
+            vec![payload.len().to_string()],
+            "/remote/download.bin",
+            payload,
+            0,
+        );
+
+        download_file(&sender, &local_string, "/remote/download.bin").unwrap();
+        assert!(wait_until(std::time::Duration::from_secs(5), || {
+            fs::read(&local).ok().as_deref() == Some(payload)
+        }));
+        responder.join().unwrap();
+        assert!(wait_until(std::time::Duration::from_secs(5), || {
+            !G_TRANSFER.read().unwrap().contains_key(&local_string)
+        }));
+    }
+
+    #[test]
+    fn download_file_resumes_a_matching_partial_file() {
+        let _guard = serial();
+        let dir = TestDir::new();
+        let local = dir.0.join("resume.bin");
+        let local_string = local.to_string_lossy().into_owned();
+        let payload = b"resumed payload";
+        fs::write(&local, &payload[..4]).unwrap();
+        let local_md5 = md5_file(vec![local_string.clone()]).unwrap()[0].clone();
+        let (sender, receiver) = channel();
+        let responder = spawn_download_responder(
+            receiver,
+            "md5_file",
+            vec![local_md5, payload.len().to_string()],
+            "/remote/resume.bin",
+            payload,
+            4,
+        );
+
+        download_file(&sender, &local_string, "/remote/resume.bin").unwrap();
+        assert!(wait_until(std::time::Duration::from_secs(5), || {
+            fs::read(&local).ok().as_deref() == Some(payload)
+        }));
+        responder.join().unwrap();
+    }
+
+    fn spawn_upload_responder(
+        receiver: Receiver<FTPPacket>,
+        rpc_response_data: Vec<String>,
+        rpc_retcode: i32,
+        remote_path: &'static str,
+        expected_start: u64,
+        payload: &'static [u8],
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let packet = receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(packet.id().unwrap(), FTPId::RPC);
+            let request = RpcMessage::parse(&packet.data).unwrap();
+            assert_eq!(request.name, "md5_file");
+            rpc_response(&request, rpc_retcode, rpc_response_data, "");
+
+            let packet = receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            assert_eq!(packet.id().unwrap(), FTPId::Put);
+            let request = TunnelRequest::parse(&packet.data).unwrap();
+            let mut tunnel =
+                TcpConnection::connect(&format!("127.0.0.1:{}", request.port)).unwrap();
+            let header = FTPPutHeader::parse(&tunnel.recv().unwrap()).unwrap();
+            assert_eq!(header.path, remote_path);
+            assert_eq!(header.total_size, payload.len() as u64);
+            assert_eq!(header.start_pos, expected_start);
+
+            let expected = &payload[expected_start as usize..];
+            let mut received = Vec::new();
+            while received.len() < expected.len() {
+                let chunk = tunnel.recv().unwrap();
+                assert!(!chunk.is_empty());
+                received.extend_from_slice(&chunk);
+            }
+            assert_eq!(received.as_slice(), expected);
+            tunnel.close();
+        })
+    }
+
+    #[test]
+    fn upload_file_streams_the_complete_file() {
+        let _guard = serial();
+        let dir = TestDir::new();
+        let local = dir.0.join("upload.bin");
+        let local_string = local.to_string_lossy().into_owned();
+        let payload = b"upload payload";
+        fs::write(&local, payload).unwrap();
+        let (sender, receiver) = channel();
+        let responder =
+            spawn_upload_responder(receiver, vec![], 1, "/remote/upload.bin", 0, payload);
+
+        upload_file(&sender, &local_string, "/remote/upload.bin").unwrap();
+        responder.join().unwrap();
+        assert!(wait_until(std::time::Duration::from_secs(5), || {
+            !G_TRANSFER.read().unwrap().contains_key(&local_string)
+        }));
+    }
+
+    #[test]
+    fn upload_file_resumes_from_the_remote_byte_offset() {
+        let _guard = serial();
+        let dir = TestDir::new();
+        let local = dir.0.join("upload-resume.bin");
+        let local_string = local.to_string_lossy().into_owned();
+        let payload = b"resumed upload payload";
+        fs::write(&local, payload).unwrap();
+        let local_md5 = md5_file(vec![local_string.clone()]).unwrap()[0].clone();
+        let (sender, receiver) = channel();
+        let responder = spawn_upload_responder(
+            receiver,
+            vec![local_md5, "5".to_string()],
+            0,
+            "/remote/upload-resume.bin",
+            5,
+            payload,
+        );
+
+        upload_file(&sender, &local_string, "/remote/upload-resume.bin").unwrap();
+        responder.join().unwrap();
+        assert!(wait_until(std::time::Duration::from_secs(5), || {
+            !G_TRANSFER.read().unwrap().contains_key(&local_string)
+        }));
+    }
+}

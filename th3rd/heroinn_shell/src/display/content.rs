@@ -502,3 +502,183 @@ impl<'a> Deref for HintMatches<'a> {
         self.matches.deref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alacritty_terminal::index::Line;
+    use alacritty_terminal::term::color::CellRgb;
+
+    fn rgb(r: u8, g: u8, b: u8) -> Rgb {
+        Rgb { r, g, b }
+    }
+
+    fn cell() -> RenderableCell {
+        RenderableCell {
+            character: ' ',
+            point: Point::new(0, Column(0)),
+            fg: rgb(1, 2, 3),
+            bg: rgb(4, 5, 6),
+            bg_alpha: 0.0,
+            underline: rgb(7, 8, 9),
+            flags: Flags::empty(),
+            extra: None,
+        }
+    }
+
+    #[test]
+    fn renderable_cursor_accessors_preserve_all_fields() {
+        let cursor = RenderableCursor {
+            shape: CursorShape::Beam,
+            cursor_color: rgb(10, 20, 30),
+            text_color: rgb(40, 50, 60),
+            is_wide: true,
+            point: Point::new(4, Column(7)),
+        };
+        assert_eq!(cursor.shape(), CursorShape::Beam);
+        assert_eq!(cursor.color(), rgb(10, 20, 30));
+        assert!(cursor.is_wide());
+        assert_eq!(cursor.point(), Point::new(4, Column(7)));
+
+        let hidden = RenderableCursor::new_hidden();
+        assert_eq!(hidden.shape(), CursorShape::Hidden);
+        assert_eq!(hidden.color(), Rgb::default());
+        assert!(!hidden.is_wide());
+        assert_eq!(hidden.point(), Point::default());
+    }
+
+    #[test]
+    fn renderable_cell_empty_requires_transparent_blank_unadorned_cells() {
+        let mut candidate = cell();
+        assert!(candidate.is_empty());
+
+        candidate.character = 'x';
+        assert!(!candidate.is_empty());
+
+        candidate.character = ' ';
+        candidate.bg_alpha = 0.5;
+        assert!(!candidate.is_empty());
+
+        candidate.bg_alpha = 0.0;
+        candidate.flags = Flags::UNDERLINE;
+        assert!(!candidate.is_empty());
+
+        candidate.flags = Flags::empty();
+        candidate.extra = Some(Box::new(RenderableCellExtra {
+            zerowidth: Some(vec!['\u{0301}']),
+            hyperlink: None,
+        }));
+        assert!(!candidate.is_empty());
+    }
+
+    #[test]
+    fn compute_cell_rgb_applies_foreground_and_background_overrides() {
+        let mut fg = rgb(1, 1, 1);
+        let mut bg = rgb(2, 2, 2);
+        let mut alpha = 0.25;
+        RenderableCell::compute_cell_rgb(
+            &mut fg,
+            &mut bg,
+            &mut alpha,
+            CellRgb::Rgb(rgb(9, 9, 9)),
+            CellRgb::Rgb(rgb(8, 8, 8)),
+        );
+        assert_eq!(fg, rgb(9, 9, 9));
+        assert_eq!(bg, rgb(8, 8, 8));
+        assert_eq!(alpha, 1.0);
+
+        let mut fg = rgb(1, 1, 1);
+        let mut bg = rgb(2, 2, 2);
+        let mut alpha = 0.25;
+        RenderableCell::compute_cell_rgb(
+            &mut fg,
+            &mut bg,
+            &mut alpha,
+            CellRgb::CellForeground,
+            CellRgb::CellBackground,
+        );
+        assert_eq!(fg, rgb(1, 1, 1));
+        assert_eq!(bg, rgb(2, 2, 2));
+        assert_eq!(alpha, 0.25);
+    }
+
+    #[test]
+    fn compute_bg_alpha_distinguishes_terminal_background_and_opacity() {
+        let mut config = UiConfig::default();
+        config.colors.transparent_background_colors = false;
+        assert_eq!(
+            RenderableCell::compute_bg_alpha(&config, Color::Named(NamedColor::Background)),
+            0.0
+        );
+        assert_eq!(
+            RenderableCell::compute_bg_alpha(&config, Color::Named(NamedColor::Foreground)),
+            1.0
+        );
+
+        config.colors.transparent_background_colors = true;
+        config.window.opacity = alacritty_terminal::config::Percentage::new(0.7);
+        assert_eq!(
+            RenderableCell::compute_bg_alpha(&config, Color::Named(NamedColor::Foreground)),
+            0.7
+        );
+        assert_eq!(
+            RenderableCell::compute_bg_alpha(&config, Color::Named(NamedColor::Background)),
+            0.0
+        );
+    }
+
+    #[test]
+    fn hint_matches_track_visible_ranges_and_expose_them() {
+        let first = Point::new(Line(0), Column(1))..=Point::new(Line(0), Column(3));
+        let second = Point::new(Line(1), Column(5))..=Point::new(Line(1), Column(6));
+        let visible = [first, second];
+        let mut matches = HintMatches::new(&visible);
+        assert_eq!(matches.len(), 2);
+
+        assert!(!matches.advance(Point::new(Line(0), Column(0))));
+        assert!(matches.advance(Point::new(Line(0), Column(1))));
+        assert!(matches.advance(Point::new(Line(0), Column(3))));
+        assert!(!matches.advance(Point::new(Line(0), Column(4))));
+        assert!(matches.advance(Point::new(Line(1), Column(5))));
+        assert!(matches.advance(Point::new(Line(1), Column(6))));
+        assert!(!matches.advance(Point::new(Line(1), Column(7))));
+    }
+
+    #[test]
+    fn hint_advance_returns_labels_only_inside_the_matching_line() {
+        let first = Point::new(Line(1), Column(2))..=Point::new(Line(1), Column(4));
+        let visible = [first];
+        let matches = HintMatches::new(&visible);
+        let labels = vec![vec!['a', 'b', 'c']];
+        let mut hint = Hint { matches, labels: &labels };
+
+        assert_eq!(
+            hint.advance(Point::new(Line(1), Column(0)), Point::new(Line(1), Column(2)),),
+            Some(('a', true))
+        );
+        assert_eq!(
+            hint.advance(Point::new(Line(1), Column(0)), Point::new(Line(1), Column(3)),),
+            Some(('b', false))
+        );
+        assert_eq!(
+            hint.advance(Point::new(Line(1), Column(0)), Point::new(Line(2), Column(3)),),
+            None
+        );
+        assert_eq!(
+            hint.advance(Point::new(Line(1), Column(0)), Point::new(Line(1), Column(5)),),
+            None
+        );
+    }
+
+    #[test]
+    fn viewport_point_conversion_handles_scrolled_lines() {
+        assert_eq!(
+            term::point_to_viewport(0, Point::new(Line(3), Column(2))),
+            Some(Point::new(3, Column(2)))
+        );
+        assert_eq!(
+            term::point_to_viewport(3, Point::new(Line(1), Column(2))),
+            Some(Point::new(4, Column(2)))
+        );
+    }
+}

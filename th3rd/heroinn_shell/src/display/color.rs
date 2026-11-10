@@ -165,3 +165,58 @@ impl IndexMut<NamedColor> for List {
         &mut self.0[idx as usize]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_palette_maps_named_foreground_background_and_dimensions() {
+        let colors = Colors::default();
+        let list = List::from(&colors);
+        assert_eq!(list[NamedColor::Foreground], colors.primary.foreground);
+        assert_eq!(list[NamedColor::Background], colors.primary.background);
+        assert_eq!(list[NamedColor::Red], colors.normal.red);
+        assert_eq!(
+            list[NamedColor::BrightForeground],
+            colors.primary.bright_foreground.unwrap_or(colors.primary.foreground)
+        );
+        assert_eq!(list[NamedColor::DimRed], colors.normal.red * DIM_FACTOR);
+        assert_eq!(list[16], Rgb { r: 0, g: 0, b: 0 });
+        assert_eq!(list[232], Rgb { r: 8, g: 8, b: 8 });
+        assert_eq!(list[255], Rgb { r: 238, g: 238, b: 238 });
+    }
+
+    #[test]
+    fn configured_dim_and_indexed_colors_override_computed_values() {
+        let colors: Colors = serde_yaml::from_str(
+            r##"
+dim:
+  red: '#010203'
+indexed_colors:
+  - { index: 16, color: '#aabbcc' }
+  - { index: 232, color: '#ddeeff' }
+"##,
+        )
+        .unwrap();
+        let list = List::from(&colors);
+        assert_eq!(list[NamedColor::DimRed], Rgb { r: 1, g: 2, b: 3 });
+        assert_eq!(list[16], Rgb { r: 0xaa, g: 0xbb, b: 0xcc });
+        assert_eq!(list[232], Rgb { r: 0xdd, g: 0xee, b: 0xff });
+    }
+
+    #[test]
+    fn mutable_indices_update_the_underlying_palette() {
+        let mut colors = Colors::default();
+        let mut list = List::from(&colors);
+        list[NamedColor::Blue] = Rgb { r: 1, g: 2, b: 3 };
+        list[200] = Rgb { r: 4, g: 5, b: 6 };
+        assert_eq!(list[NamedColor::Blue], Rgb { r: 1, g: 2, b: 3 });
+        assert_eq!(list[200], Rgb { r: 4, g: 5, b: 6 });
+
+        colors.normal.blue = Rgb { r: 9, g: 8, b: 7 };
+        list.fill_named(&colors);
+        assert_eq!(list[NamedColor::Blue], Rgb { r: 9, g: 8, b: 7 });
+        assert_eq!(list[200], Rgb { r: 4, g: 5, b: 6 });
+    }
+}

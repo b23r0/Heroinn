@@ -90,3 +90,51 @@ fn hollow(x: f32, y: f32, width: f32, height: f32, thickness: f32, color: Rgb) -
         index: 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const COLOR: Rgb = Rgb { r: 1, g: 2, b: 3 };
+
+    fn coords(rect: RenderRect) -> (f32, f32, f32, f32, f32) {
+        (rect.x, rect.y, rect.width, rect.height, rect.alpha)
+    }
+
+    #[test]
+    fn beam_is_a_single_full_height_rect() {
+        let mut rects = beam(10.0, 20.0, 30.0, 2.0, COLOR);
+        let rect = rects.next().unwrap();
+        assert_eq!(coords(rect), (10.0, 20.0, 2.0, 30.0, 1.0));
+        assert_eq!(rect.color, COLOR);
+        assert!(rects.next().is_none());
+    }
+
+    #[test]
+    fn underline_is_anchored_to_the_cell_bottom() {
+        let rect = underline(10.0, 20.0, 30.0, 40.0, 2.0, COLOR).next().unwrap();
+        assert_eq!(coords(rect), (10.0, 58.0, 30.0, 2.0, 1.0));
+        assert_eq!(rect.color, COLOR);
+    }
+
+    #[test]
+    fn hollow_cursor_emits_four_non_overlapping_edges() {
+        let rects = hollow(10.0, 20.0, 40.0, 30.0, 2.0, COLOR).collect::<Vec<_>>();
+        assert_eq!(rects.len(), 4);
+        assert_eq!(coords(rects[0]), (10.0, 20.0, 40.0, 2.0, 1.0));
+        assert_eq!(coords(rects[1]), (10.0, 48.0, 40.0, 2.0, 1.0));
+        assert_eq!(coords(rects[2]), (10.0, 22.0, 2.0, 26.0, 1.0));
+        assert_eq!(coords(rects[3]), (48.0, 22.0, 2.0, 26.0, 1.0));
+        assert!(rects.iter().all(|rect| rect.color == COLOR));
+    }
+
+    #[test]
+    fn cursor_rect_iterator_is_empty_by_default_and_single_rect_from_one() {
+        let mut empty = CursorRects::default();
+        assert!(empty.next().is_none());
+        let rect = RenderRect::new(1.0, 2.0, 3.0, 4.0, COLOR, 0.5);
+        let mut single = CursorRects::from(rect);
+        assert_eq!(coords(single.next().unwrap()), coords(rect));
+        assert!(single.next().is_none());
+    }
+}

@@ -95,3 +95,37 @@ impl Meter {
         self.index = (self.index + 1) % NUM_SAMPLES;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn micros(value: u64) -> Duration {
+        Duration::from_micros(value)
+    }
+
+    #[test]
+    fn samples_rotate_through_a_fixed_window() {
+        let mut meter = Meter::new();
+        assert_eq!(meter.average(), 0.0);
+        for value in 1..=10 {
+            meter.add_sample(micros(value));
+        }
+        assert!((meter.average() - 5.5).abs() < 1e-9);
+        assert_eq!(meter.index, 0);
+
+        meter.add_sample(micros(100));
+        assert!((meter.average() - 15.4).abs() < 1e-9);
+        assert_eq!(meter.index, 1);
+    }
+
+    #[test]
+    fn sampler_updates_average_when_dropped() {
+        let mut meter = Meter::new();
+        {
+            let _sampler = meter.sampler();
+        }
+        assert!(meter.average() > 0.0);
+        assert_eq!(meter.index, 1);
+    }
+}

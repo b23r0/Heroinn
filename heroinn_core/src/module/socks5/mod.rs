@@ -226,3 +226,34 @@ fn sanitize_reason(reason: &str) -> String {
 pub fn session_packet_id(data: &[u8]) -> Result<String> {
     Ok(serde_json::from_slice::<SessionPacket>(data)?.id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_packet_id_requires_a_valid_packet() {
+        let packet = SessionPacket {
+            id: "session-id".to_string(),
+            data: vec![1, 2, 3],
+        };
+        assert_eq!(
+            session_packet_id(&serde_json::to_vec(&packet).unwrap()).unwrap(),
+            "session-id"
+        );
+        assert!(session_packet_id(b"not-json").is_err());
+        assert!(session_packet_id(br#"{"data":[]}"#).is_err());
+    }
+
+    #[test]
+    fn sidecar_reason_redacts_userinfo_and_control_characters() {
+        let reason = "failed\nhttps://user:secret@example.com:8443/path\r\u{1b}[31m";
+        let sanitized = sanitize_reason(reason);
+        assert!(!sanitized.contains("secret"));
+        assert!(!sanitized.contains("user"));
+        assert!(!sanitized.contains('\n'));
+        assert!(!sanitized.contains('\r'));
+        assert!(!sanitized.contains('\u{1b}'));
+        assert!(sanitized.len() <= 512);
+    }
+}

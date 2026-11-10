@@ -120,3 +120,91 @@ fn cubic_bezier(p0: f64, p1: f64, p2: f64, p3: f64, x: f64) -> f64 {
         + 3.0 * (1.0 - x) * x.powi(2) * p2
         + x.powi(3) * p3
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bell(animation: BellAnimation, duration: Duration) -> VisualBell {
+        VisualBell { animation, duration, start_time: None }
+    }
+
+    #[test]
+    fn disabled_and_inactive_bells_have_zero_intensity() {
+        assert_eq!(bell(BellAnimation::Linear, Duration::ZERO).intensity(), 0.0);
+        let mut inactive = bell(BellAnimation::EaseOutExpo, Duration::from_secs(1));
+        assert_eq!(inactive.intensity(), 0.0);
+        assert!(inactive.completed());
+        assert!(inactive.ring().is_finite());
+        assert!(!inactive.completed());
+    }
+
+    #[test]
+    fn linear_animation_decays_from_one_to_zero() {
+        let duration = Duration::from_secs(1);
+        let start = Instant::now();
+        let bell =
+            VisualBell { animation: BellAnimation::Linear, duration, start_time: Some(start) };
+        assert_eq!(bell.intensity_at_instant(start), 1.0);
+        let quarter = bell.intensity_at_instant(start + Duration::from_millis(250));
+        assert!((quarter - 0.75).abs() < 1e-9);
+        let end = bell.intensity_at_instant(start + duration);
+        assert!(end.abs() < 1e-9);
+        assert_eq!(bell.intensity_at_instant(start - Duration::from_millis(1)), 0.0);
+    }
+
+    #[test]
+    fn all_easing_curves_are_bounded_and_complete() {
+        let start = Instant::now();
+        for animation in [
+            BellAnimation::Ease,
+            BellAnimation::EaseOut,
+            BellAnimation::EaseOutSine,
+            BellAnimation::EaseOutQuad,
+            BellAnimation::EaseOutCubic,
+            BellAnimation::EaseOutQuart,
+            BellAnimation::EaseOutQuint,
+            BellAnimation::EaseOutExpo,
+            BellAnimation::EaseOutCirc,
+            BellAnimation::Linear,
+        ] {
+            let bell = VisualBell {
+                animation,
+                duration: Duration::from_millis(500),
+                start_time: Some(start),
+            };
+            for elapsed_ms in [0, 1, 100, 250, 499, 500, 1000] {
+                let intensity =
+                    bell.intensity_at_instant(start + Duration::from_millis(elapsed_ms));
+                assert!(
+                    (0.0..=1.0).contains(&intensity),
+                    "{animation:?} at {elapsed_ms}ms produced {intensity}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn completed_clears_an_expired_animation_once() {
+        let mut bell = bell(BellAnimation::Linear, Duration::from_millis(1));
+        bell.start_time = Some(Instant::now() - Duration::from_secs(1));
+        assert!(!bell.completed());
+        assert!(bell.completed());
+        assert_eq!(bell.intensity(), 0.0);
+    }
+
+    #[test]
+    fn config_constructor_defines_the_duration_source() {
+        let config = BellConfig::default();
+        let bell = VisualBell::from(&config);
+        assert_eq!(bell.duration, config.duration());
+        assert_eq!(bell.animation, config.animation);
+        assert!(bell.start_time.is_none());
+    }
+
+    #[test]
+    fn bezier_endpoints_are_exact() {
+        assert_eq!(cubic_bezier(0.1, 0.2, 0.3, 0.4, 0.0), 0.1);
+        assert!((cubic_bezier(0.1, 0.2, 0.3, 0.4, 1.0) - 0.4).abs() < 1e-12);
+    }
+}

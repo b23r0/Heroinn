@@ -86,3 +86,29 @@ fn merge_rects(lhs: Rect, rhs: Rect) -> Rect {
     let y_bottom = cmp::min(lhs.y, rhs.y);
     Rect { x: left_x, y: y_bottom, width: right_x - left_x, height: y_top - y_bottom }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlap_detection_includes_touching_edges_and_rejects_gaps() {
+        let base = Rect { x: 10, y: 10, width: 10, height: 10 };
+        assert!(rects_overlap(base, Rect { x: 19, y: 19, width: 1, height: 1 }));
+        assert!(rects_overlap(base, Rect { x: 20, y: 10, width: 5, height: 5 }));
+        assert!(rects_overlap(base, Rect { x: 10, y: 20, width: 5, height: 5 }));
+        assert!(!rects_overlap(base, Rect { x: 21, y: 10, width: 5, height: 5 }));
+        assert!(!rects_overlap(base, Rect { x: 10, y: 21, width: 5, height: 5 }));
+        assert!(!rects_overlap(base, Rect { x: 0, y: 0, width: 9, height: 10 }));
+        assert!(!rects_overlap(base, Rect { x: 0, y: 0, width: 10, height: 9 }));
+    }
+
+    #[test]
+    fn merge_returns_the_smallest_containing_rectangle() {
+        let merged = merge_rects(
+            Rect { x: 10, y: 20, width: 30, height: 40 },
+            Rect { x: 5, y: 10, width: 10, height: 15 },
+        );
+        assert_eq!(merged, Rect { x: 5, y: 10, width: 35, height: 50 });
+    }
+}

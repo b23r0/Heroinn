@@ -171,7 +171,7 @@ impl From<SizeInfo<f32>> for SizeInfo<u32> {
             padding_x: size_info.padding_x as u32,
             padding_y: size_info.padding_y as u32,
             screen_lines: size_info.screen_lines,
-            columns: size_info.screen_lines,
+            columns: size_info.columns,
         }
     }
 }
@@ -1307,4 +1307,71 @@ fn window_size(
     let height = (padding.1).mul_add(2., grid_height).floor();
 
     PhysicalSize::new(width as u32, height as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_size_info_clamps_geometry_and_preserves_columns_in_conversion() {
+        let size = SizeInfo::new(800.0, 600.0, 10.0, 20.0, 5.0, 5.0, true);
+        assert_eq!(size.width(), 800.0);
+        assert_eq!(size.height(), 600.0);
+        assert_eq!(size.cell_width(), 10.0);
+        assert_eq!(size.cell_height(), 20.0);
+        assert_eq!(size.padding_x(), 5.0);
+        assert_eq!(size.padding_y(), 10.0);
+        assert_eq!(size.columns(), 79);
+        assert_eq!(size.screen_lines(), 29);
+        assert_eq!(size.total_lines(), 29);
+
+        assert!(size.contains_point(6, 11));
+        assert!(size.contains_point(795, 590));
+        assert!(!size.contains_point(5, 11));
+        assert!(!size.contains_point(796, 590));
+        assert!(!size.contains_point(6, 10));
+        assert!(!size.contains_point(6, 591));
+
+        let unsigned: SizeInfo<u32> = size.into();
+        assert_eq!(unsigned.width(), 800);
+        assert_eq!(unsigned.columns, 79);
+        assert_eq!(unsigned.screen_lines, 29);
+        let window: WindowSize = size.into();
+        assert_eq!(window.num_cols, 79);
+        assert_eq!(window.num_lines, 29);
+        assert_eq!(window.cell_width, 10);
+        assert_eq!(window.cell_height, 20);
+    }
+
+    #[test]
+    fn tiny_geometry_is_clamped_and_reserved_lines_never_hide_the_viewport() {
+        let size = SizeInfo::new(1.0, 1.0, 20.0, 20.0, 0.0, 0.0, false);
+        assert_eq!(size.columns(), MIN_COLUMNS);
+        assert_eq!(size.screen_lines(), MIN_SCREEN_LINES);
+        let mut reserved = size;
+        reserved.reserve_lines(usize::MAX);
+        assert_eq!(reserved.screen_lines(), MIN_SCREEN_LINES);
+    }
+
+    #[test]
+    fn display_update_tracks_each_dirty_dimension_independently() {
+        let mut update = DisplayUpdate::default();
+        assert!(!update.dirty);
+        assert!(update.dimensions().is_none());
+        assert!(update.font().is_none());
+        assert!(!update.cursor_dirty());
+
+        update.set_dimensions(PhysicalSize::new(1200, 700));
+        assert!(update.dirty);
+        assert_eq!(update.dimensions(), Some(PhysicalSize::new(1200, 700)));
+
+        update.set_font(Font::default());
+        assert!(update.font().is_some());
+
+        update.dirty = false;
+        update.set_cursor_dirty();
+        assert!(update.dirty);
+        assert!(update.cursor_dirty());
+    }
 }

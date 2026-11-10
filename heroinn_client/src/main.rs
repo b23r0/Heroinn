@@ -487,4 +487,60 @@ mod tests {
             heroinn_util::dna::CLIENT_CAPABILITY_MARKER
         );
     }
+
+    #[test]
+    fn proxy_endpoint_display_normalizes_protocol_and_never_invents_addresses() {
+        let display =
+            display_proxy_endpoint("https://proxy.example:8443", Some("system".to_string()));
+        assert_eq!(display.protocol, "HTTPS");
+        assert_eq!(display.address, "proxy.example:8443");
+        assert_eq!(display.source.as_deref(), Some("system"));
+
+        let protocol_only = display_proxy_endpoint("socks5", None);
+        assert_eq!(protocol_only.protocol, "SOCKS5");
+        assert!(protocol_only.address.is_empty());
+    }
+
+    #[test]
+    fn system_proxy_display_distinguishes_none_bypass_and_configured_routes() {
+        let none = system_proxy_display(&RouteReport::default());
+        assert_eq!(none.protocol, "None");
+        assert!(none.address.is_empty());
+
+        let bypass = RouteReport {
+            system_bypassed: true,
+            system_source: Some(ProxySource::Environment),
+            ..RouteReport::default()
+        };
+        let bypass_display = system_proxy_display(&bypass);
+        assert_eq!(bypass_display.protocol, "Bypassed");
+        assert_eq!(bypass_display.source.as_deref(), Some("environment"));
+
+        let configured = RouteReport {
+            system_proxy: Some("http://proxy.example:8080".to_string()),
+            system_source: Some(ProxySource::System),
+            ..RouteReport::default()
+        };
+        let configured_display = system_proxy_display(&configured);
+        assert_eq!(configured_display.protocol, "HTTP");
+        assert_eq!(configured_display.address, "proxy.example:8080");
+        assert_eq!(configured_display.source.as_deref(), Some("system"));
+    }
+
+    #[test]
+    fn specified_socks_display_is_disabled_or_redacted_endpoint() {
+        let disabled = socks5_proxy_display(&RouteReport::default());
+        assert_eq!(disabled.protocol, "Disabled");
+        assert!(disabled.address.is_empty());
+        assert!(disabled.source.is_none());
+
+        let enabled = RouteReport {
+            socks5_proxy: Some("socks5://[::1]:1080".to_string()),
+            ..RouteReport::default()
+        };
+        let enabled_display = socks5_proxy_display(&enabled);
+        assert_eq!(enabled_display.protocol, "SOCKS5");
+        assert_eq!(enabled_display.address, "[::1]:1080");
+        assert_eq!(enabled_display.source.as_deref(), Some("specified"));
+    }
 }

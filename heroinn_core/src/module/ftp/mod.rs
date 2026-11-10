@@ -25,8 +25,6 @@ pub struct FtpServer {
 
 impl ServerSession for FtpServer {
     fn new(sender: Sender<SessionBase>, clientid: &str, peer_addr: &str) -> Result<Self> {
-        let closed = Arc::new(AtomicBool::new(false));
-
         let driver = if cfg!(target_os = "windows") {
             "heroinn_ftp.exe"
         } else {
@@ -36,7 +34,17 @@ impl ServerSession for FtpServer {
         let driver_path = ftp_port::locate_sidecar(driver).map_err(Error::Other)?;
 
         let ftp = FtpInstance::new(&driver_path, peer_addr)?;
+        Self::from_instance(sender, clientid, ftp)
+    }
+}
 
+impl FtpServer {
+    fn from_instance(
+        sender: Sender<SessionBase>,
+        clientid: &str,
+        ftp: FtpInstance,
+    ) -> Result<Self> {
+        let closed = Arc::new(AtomicBool::new(false));
         let mut ftp_1 = ftp.try_clone()?;
         let closed_2 = closed.clone();
         std::thread::spawn(move || {
@@ -138,5 +146,96 @@ impl Session for FtpServer {
         }
         log::info!("ftp session closed");
         self.closed.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+    use std::process::{Child, Command, Stdio};
+    use std::sync::mpsc::{Receiver, channel};
+    use std::time::{Duration, Instant};
+
+    use heroinn_util::ftp::FTPId;
+    use heroinn_util::protocol::frame::{read_frame, write_frame};
+
+    fn idle_child() -> Child {
+        let mut command = if cfg!(windows) {
+            Command::new("cmd")
+        } else {
+            Command::new("sh")
+        };
+        if cfg!(windows) {
+            command.args(["/C", "ping -n 30 127.0.0.1 >NUL"]);
+        } else {
+            command.args(["-c", "sleep 30"]);
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn connected_server() -> (FtpServer, TcpStream, Receiver<SessionBase>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = std::thread::spawn(move || TcpStream::connect(address).unwrap());
+        let (socket, _) = listener.accept().unwrap();
+        let peer = peer.join().unwrap();
+        let instance = FtpInstance::from_test_parts(socket, idle_child());
+        let (sender, receiver) = channel();
+        let server = FtpServer::from_instance(sender, "client-a", instance).unwrap();
+        (server, peer, receiver)
+    }
+
+    fn wait_until(mut predicate: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if predicate() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn relay_forwards_worker_frames_and_close_packet_once() {
+        let (mut server, mut peer, receiver) = connected_server();
+        assert!(server.alive());
+        assert_eq!(server.id().len(), 36);
+        assert_eq!(server.clientid(), "client-a");
+
+        server.write(b"client-to-worker").unwrap();
+        assert_eq!(read_frame(&mut peer).unwrap(), b"client-to-worker");
+
+        write_frame(&mut peer, b"worker-to-client").unwrap();
+        let base = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(base.id, server.id());
+        assert_eq!(base.clientid, "client-a");
+        assert_eq!(base.packet.id, server.id());
+        assert_eq!(base.packet.data, b"worker-to-client");
+
+        drop(peer);
+        assert!(wait_until(|| !server.alive()));
+
+        server.close();
+        assert!(!server.alive());
+        let close = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        let packet = FTPPacket::parse(&close.packet.data).unwrap();
+        assert_eq!(packet.id().unwrap(), FTPId::Close);
+        assert!(packet.data.is_empty());
+    }
+
+    #[test]
+    fn worker_eof_marks_the_session_dead_without_an_empty_packet() {
+        let (server, peer, receiver) = connected_server();
+        drop(peer);
+
+        assert!(wait_until(|| !server.alive()));
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_err());
     }
 }

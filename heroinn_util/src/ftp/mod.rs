@@ -128,3 +128,93 @@ pub struct DirectoryInfo {
     pub path: String,
     pub detail: Vec<FileInfo>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ftp_ids_round_trip_and_unknown_ids_fail() {
+        for (id, byte) in [
+            (FTPId::RPC, 0x01),
+            (FTPId::Get, 0x02),
+            (FTPId::Put, 0x03),
+            (FTPId::Close, 0x04),
+        ] {
+            assert_eq!(id.to_u8(), byte);
+            assert_eq!(FTPId::try_from(byte).unwrap(), id);
+        }
+        assert!(matches!(
+            FTPId::try_from(0xff),
+            Err(Error::UnknownFtpId(0xff))
+        ));
+    }
+
+    #[test]
+    fn packets_headers_and_file_info_round_trip() {
+        let packet = FTPPacket {
+            id: FTPId::Put.to_u8(),
+            data: b"packet".to_vec(),
+        };
+        let decoded = FTPPacket::parse(&packet.serialize().unwrap()).unwrap();
+        assert_eq!(decoded.id, 0x03);
+        assert_eq!(decoded.data, b"packet");
+        assert_eq!(decoded.id().unwrap(), FTPId::Put);
+
+        for packet in [
+            FTPPacket {
+                id: 1,
+                data: Vec::new(),
+            },
+            FTPPacket {
+                id: 2,
+                data: vec![0xff],
+            },
+        ] {
+            let decoded = FTPPacket::parse(&packet.serialize().unwrap()).unwrap();
+            assert_eq!(decoded.id, packet.id);
+            assert_eq!(decoded.data, packet.data);
+        }
+
+        let get = FTPGetHeader {
+            path: "/tmp/file".to_string(),
+            start_pos: 42,
+        };
+        assert_eq!(
+            FTPGetHeader::parse(&get.serialize().unwrap())
+                .unwrap()
+                .start_pos,
+            42
+        );
+        let put = FTPPutHeader {
+            path: "C:\\file".to_string(),
+            total_size: 100,
+            start_pos: 10,
+        };
+        let parsed = FTPPutHeader::parse(&put.serialize().unwrap()).unwrap();
+        assert_eq!(parsed.path, "C:\\file");
+        assert_eq!(parsed.total_size, 100);
+        assert_eq!(parsed.start_pos, 10);
+
+        let info = FileInfo {
+            name: "name".to_string(),
+            size: 7,
+            typ: "FILE".to_string(),
+            last_modified: "2026-01-01 00:00:00".to_string(),
+        };
+        let encoded = info.serialize().unwrap();
+        let parsed = FileInfo::parse(&encoded).unwrap();
+        assert_eq!(parsed.name, info.name);
+        assert_eq!(parsed.size, info.size);
+        assert_eq!(parsed.typ, info.typ);
+        assert_eq!(parsed.last_modified, info.last_modified);
+    }
+
+    #[test]
+    fn malformed_packets_return_errors() {
+        assert!(FTPPacket::parse(b"not-json").is_err());
+        assert!(FTPGetHeader::parse(b"{}").is_err());
+        assert!(FTPPutHeader::parse(b"{}").is_err());
+        assert!(FileInfo::parse("{").is_err());
+    }
+}

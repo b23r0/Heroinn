@@ -470,3 +470,214 @@ impl RectShaderProgram {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alacritty_terminal::index::Column;
+
+    fn metrics() -> Metrics {
+        Metrics {
+            average_advance: 10.0,
+            line_height: 20.0,
+            descent: 4.0,
+            underline_position: 2.0,
+            underline_thickness: 0.5,
+            strikeout_position: 8.0,
+            strikeout_thickness: 1.5,
+        }
+    }
+
+    fn size() -> SizeInfo {
+        SizeInfo::new(100.0, 100.0, 10.0, 20.0, 5.0, 5.0, false)
+    }
+
+    fn color() -> Rgb {
+        Rgb { r: 12, g: 34, b: 56 }
+    }
+
+    fn underline_color() -> Rgb {
+        Rgb { r: 200, g: 100, b: 50 }
+    }
+
+    fn cell(line: usize, column: usize, flags: Flags) -> RenderableCell {
+        RenderableCell {
+            character: 'x',
+            point: Point::new(line, Column(column)),
+            fg: color(),
+            bg: Rgb { r: 0, g: 0, b: 0 },
+            bg_alpha: 1.0,
+            underline: underline_color(),
+            flags,
+            extra: None,
+        }
+    }
+
+    #[test]
+    fn render_rect_new_defaults_to_a_normal_rect() {
+        let rect = RenderRect::new(1.0, 2.0, 3.0, 4.0, color(), 0.5);
+        assert_eq!(rect.x, 1.0);
+        assert_eq!(rect.y, 2.0);
+        assert_eq!(rect.width, 3.0);
+        assert_eq!(rect.height, 4.0);
+        assert_eq!(rect.color, color());
+        assert_eq!(rect.alpha, 0.5);
+        assert_eq!(rect.kind, RectKind::Normal);
+    }
+
+    #[test]
+    fn render_line_rects_wrap_at_last_column_and_clamp_thickness() {
+        let line = RenderLine {
+            start: Point::new(0, Column(1)),
+            end: Point::new(2, Column(3)),
+            color: color(),
+        };
+        let rects = line.rects(Flags::UNDERLINE, &metrics(), &size());
+        assert_eq!(rects.len(), 3);
+
+        assert_eq!(rects[0].x, 15.0);
+        assert_eq!(rects[0].y, 24.0);
+        assert_eq!(rects[0].width, 80.0);
+        assert_eq!(rects[0].height, 1.0);
+        assert_eq!(rects[0].kind, RectKind::Normal);
+
+        assert_eq!(rects[1].x, 5.0);
+        assert_eq!(rects[1].y, 44.0);
+        assert_eq!(rects[1].width, 90.0);
+
+        assert_eq!(rects[2].x, 5.0);
+        assert_eq!(rects[2].y, 64.0);
+        assert_eq!(rects[2].width, 40.0);
+        assert_eq!(rects[2].color, color());
+        assert_eq!(rects[2].alpha, 1.0);
+    }
+
+    #[test]
+    fn every_supported_line_flag_maps_to_the_expected_rect_kind() {
+        let line = RenderLine {
+            start: Point::new(0, Column(0)),
+            end: Point::new(0, Column(2)),
+            color: color(),
+        };
+
+        let double = line.rects(Flags::DOUBLE_UNDERLINE, &metrics(), &size());
+        assert_eq!(double.len(), 2);
+        assert!(double.iter().all(|rect| rect.kind == RectKind::Normal));
+
+        let cases = [
+            (Flags::UNDERLINE, RectKind::Normal, 1),
+            (Flags::UNDERCURL, RectKind::Undercurl, 1),
+            (Flags::DOTTED_UNDERLINE, RectKind::DottedUnderline, 1),
+            (Flags::DASHED_UNDERLINE, RectKind::DashedUnderline, 1),
+            (Flags::STRIKEOUT, RectKind::Normal, 1),
+        ];
+        for (flag, expected_kind, expected_len) in cases {
+            let rects = line.rects(flag, &metrics(), &size());
+            assert_eq!(rects.len(), expected_len);
+            assert_eq!(rects[0].kind, expected_kind);
+        }
+    }
+
+    #[test]
+    fn create_rect_enforces_minimum_thickness_and_accounts_for_padding() {
+        let size = size();
+        let rect = RenderLine::create_rect(
+            &size,
+            4.0,
+            Point::new(0, Column(2)),
+            Point::new(0, Column(3)),
+            2.0,
+            0.0,
+            color(),
+        );
+        assert_eq!(rect.x, 25.0);
+        assert_eq!(rect.width, 20.0);
+        assert_eq!(rect.height, 1.0);
+        assert_eq!(rect.y, 24.0);
+    }
+
+    #[test]
+    fn render_lines_merge_adjacent_cells_and_split_on_gaps_or_color_changes() {
+        let mut lines = RenderLines::new();
+        lines.update(&cell(1, 2, Flags::UNDERLINE));
+        lines.update(&cell(1, 3, Flags::UNDERLINE));
+        lines.update(&cell(1, 4, Flags::UNDERLINE));
+
+        let stored = lines.inner.get(&Flags::UNDERLINE).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].start, Point::new(1, Column(2)));
+        assert_eq!(stored[0].end, Point::new(1, Column(4)));
+        assert_eq!(stored[0].color, underline_color());
+
+        lines.update(&cell(1, 6, Flags::UNDERLINE));
+        assert_eq!(lines.inner.get(&Flags::UNDERLINE).unwrap().len(), 2);
+
+        let mut other_color = cell(1, 7, Flags::UNDERLINE);
+        other_color.underline = Rgb { r: 1, g: 2, b: 3 };
+        lines.update(&other_color);
+        let stored = lines.inner.get(&Flags::UNDERLINE).unwrap();
+        assert_eq!(stored.len(), 3);
+        assert_eq!(stored[2].color, Rgb { r: 1, g: 2, b: 3 });
+    }
+
+    #[test]
+    fn render_lines_handle_wide_chars_and_strikeout_color_semantics() {
+        let mut lines = RenderLines::new();
+        lines.update(&cell(0, 3, Flags::UNDERLINE | Flags::UNDERCURL | Flags::WIDE_CHAR));
+
+        let underline = lines.inner.get(&Flags::UNDERLINE).unwrap();
+        assert_eq!(underline[0].end, Point::new(0, Column(4)));
+        let undercurl = lines.inner.get(&Flags::UNDERCURL).unwrap();
+        assert_eq!(undercurl[0].end, Point::new(0, Column(4)));
+
+        lines.update(&cell(2, 1, Flags::STRIKEOUT));
+        let strikeout = lines.inner.get(&Flags::STRIKEOUT).unwrap();
+        assert_eq!(strikeout[0].color, color());
+
+        let rects = lines.rects(&metrics(), &size());
+        assert!(!rects.is_empty());
+        assert!(rects.iter().any(|rect| rect.kind == RectKind::Undercurl));
+    }
+
+    #[test]
+    fn render_lines_ignore_cells_without_line_flags() {
+        let mut lines = RenderLines::new();
+        lines.update(&cell(0, 0, Flags::BOLD));
+        assert!(lines.inner.is_empty());
+        assert!(lines.rects(&metrics(), &size()).is_empty());
+    }
+
+    #[test]
+    fn add_rect_emits_two_triangles_in_normalized_device_coordinates() {
+        let rect = RenderRect {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 10.0,
+            color: Rgb { r: 255, g: 128, b: 0 },
+            alpha: 0.5,
+            kind: RectKind::Normal,
+        };
+        let mut vertices = Vec::new();
+        RectRenderer::add_rect(&mut vertices, 100.0, 50.0, &rect);
+        assert_eq!(vertices.len(), 6);
+
+        assert_eq!(vertices[0].x, -1.0);
+        assert_eq!(vertices[0].y, 1.0);
+        assert_eq!(vertices[1].x, -1.0);
+        assert_eq!(vertices[1].y, 0.8);
+        assert_eq!(vertices[2].x, -0.8);
+        assert_eq!(vertices[2].y, 1.0);
+        assert_eq!(vertices[3].x, -0.8);
+        assert_eq!(vertices[3].y, 1.0);
+        assert_eq!(vertices[4].x, vertices[3].x);
+        assert_eq!(vertices[4].y, 0.8);
+        assert_eq!(vertices[5].x, vertices[1].x);
+        assert_eq!(vertices[5].y, 0.8);
+
+        assert_eq!(vertices[0].r, 255);
+        assert_eq!(vertices[0].g, 128);
+        assert_eq!(vertices[0].b, 0);
+        assert_eq!(vertices[0].a, 127);
+    }
+}

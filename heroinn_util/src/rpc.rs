@@ -183,11 +183,136 @@ fn read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
 
 /// Write a lock, recovering the guard when a previous holder panicked.
 fn write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    lock.write().unwrap_or_else(|poisoned| poisoned.into_inner())
+    lock.write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Drop for RpcClient {
     fn drop(&mut self) {
         self.is_closed.store(true, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ok_call(params: Vec<String>) -> Result<Vec<String>> {
+        Ok(params
+            .into_iter()
+            .map(|value| value.to_uppercase())
+            .collect())
+    }
+
+    fn failed_call(_: Vec<String>) -> Result<Vec<String>> {
+        Err(Error::Other("business failure".to_string()))
+    }
+
+    fn message(name: &str, data: Vec<String>) -> RpcMessage {
+        RpcMessage {
+            id: "request-id".to_string(),
+            name: name.to_string(),
+            retcode: 0,
+            time: 1,
+            msg: String::new(),
+            data,
+        }
+    }
+
+    #[test]
+    fn rpc_message_round_trips_and_rejects_malformed_json() {
+        let request = RpcMessage::build_call("echo", vec!["one".to_string()]);
+        let encoded = request.serialize().unwrap();
+        let decoded = RpcMessage::parse(&encoded).unwrap();
+
+        assert_eq!(decoded.id, request.id);
+        assert_eq!(decoded.name, "echo");
+        assert_eq!(decoded.data, ["one"]);
+        assert!(decoded.time > 0);
+        assert!(UuidLike::valid(&decoded.id));
+        assert!(matches!(
+            RpcMessage::parse(b"not-json"),
+            Err(Error::Json(_))
+        ));
+    }
+
+    #[test]
+    fn rpc_server_dispatches_success_and_preserves_request_identity() {
+        let mut server = RpcServer::new();
+        server.register("upper", ok_call);
+        let request = message("upper", vec!["alpha".to_string(), "beta".to_string()]);
+
+        let response = server.call(&request);
+
+        assert_eq!(response.id, request.id);
+        assert_eq!(response.name, request.name);
+        assert_eq!(response.retcode, 0);
+        assert_eq!(response.data, ["ALPHA", "BETA"]);
+        assert!(response.msg.is_empty());
+    }
+
+    #[test]
+    fn rpc_server_returns_stable_errors_for_unknown_and_failing_handlers() {
+        let mut server = RpcServer::new();
+        server.register("failed", failed_call);
+        let unknown = server.call(&message("missing", vec![]));
+        let failed = server.call(&message("failed", vec![]));
+
+        assert_eq!(unknown.retcode, -1);
+        assert_eq!(unknown.data, Vec::<String>::new());
+        assert!(unknown.msg.contains("not found rpc [missing]"));
+        assert_eq!(failed.retcode, -2);
+        assert!(failed.msg.contains("business failure"));
+    }
+
+    #[test]
+    fn rpc_client_records_and_returns_the_matching_response() {
+        let client = RpcClient::new();
+        let mut response = message("upper", vec!["value".to_string()]);
+        response.id = "response-id".to_string();
+        response.retcode = 7;
+
+        client.write(&response);
+
+        let received = client.wait_msg("response-id", 0).unwrap();
+        assert_eq!(received.id, "response-id");
+        assert_eq!(received.retcode, 7);
+    }
+
+    #[test]
+    fn rpc_client_times_out_for_an_unknown_response() {
+        let client = RpcClient::new();
+        let start = std::time::Instant::now();
+        let error = client.wait_msg("missing", 0).unwrap_err();
+        assert!(matches!(error, Error::Timeout));
+        assert!(start.elapsed() < std::time::Duration::from_secs(3));
+    }
+
+    #[test]
+    fn poisoned_rpc_locks_remain_locked_out_safely() {
+        let lock = Arc::new(RwLock::new(vec![1_u8]));
+        let poison = lock.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poison.write().unwrap();
+            panic!("intentional lock poison");
+        })
+        .join();
+
+        assert_eq!(read(&lock).as_slice(), &[1]);
+        write(&lock).push(2);
+        assert_eq!(read(&lock).as_slice(), &[1, 2]);
+    }
+
+    struct UuidLike;
+
+    impl UuidLike {
+        fn valid(value: &str) -> bool {
+            value.len() == 36
+                && value
+                    .as_bytes()
+                    .iter()
+                    .enumerate()
+                    .all(|(index, byte)| matches!(index, 8 | 13 | 18 | 23) == (*byte == b'-'))
+        }
     }
 }

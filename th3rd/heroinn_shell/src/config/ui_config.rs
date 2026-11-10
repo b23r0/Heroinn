@@ -516,3 +516,87 @@ impl PartialEq for LazyRegexVariant {
     }
 }
 impl Eq for LazyRegexVariant {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::window::Dimensions;
+    use alacritty_terminal::index::Column;
+    use crossfont::Size as FontSize;
+
+    #[test]
+    fn ui_config_deserializes_overrides_and_deprecated_opacity() {
+        let yaml = r#"
+live_config_reload: false
+alt_send_esc: false
+draw_bold_text_with_bright_colors: true
+font:
+  size: 13.0
+window:
+  opacity: 0.8
+  dynamic_padding: true
+  dimensions:
+    columns: 80
+    lines: 24
+  padding:
+    x: 4
+    y: 6
+  title: "Heroinn Shell"
+  class:
+    instance: "heroinn"
+    general: "Heroinn"
+background_opacity: 0.25
+hints:
+  alphabet: "abc"
+  enabled: []
+colors:
+  transparent_background_colors: true
+"#;
+        let config: UiConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!config.live_config_reload);
+        assert!(!config.alt_send_esc);
+        assert!(config.draw_bold_text_with_bright_colors);
+        assert_eq!(config.font.size(), FontSize::new(13.0));
+        assert!(config.window.dynamic_padding);
+        assert_eq!(config.window.dimensions(), Some(Dimensions { columns: Column(80), lines: 24 }));
+        assert_eq!(config.window.padding(1.0), (4.0, 6.0));
+        assert_eq!(config.window.identity.title, "Heroinn Shell");
+        assert_eq!(config.window.identity.class.instance, "heroinn");
+        assert_eq!(config.window.identity.class.general, "Heroinn");
+        assert_eq!(config.window_opacity(), 0.25);
+        assert!(config.colors.transparent_background_colors);
+        assert_eq!(config.hints.alphabet(), "abc");
+        assert!(config.hints.enabled.is_empty());
+    }
+
+    #[test]
+    fn window_opacity_falls_back_to_the_window_configuration() {
+        let mut config = UiConfig::default();
+        config.window.opacity = Percentage::new(0.6);
+        assert_eq!(config.window_opacity(), 0.6);
+
+        config.window.opacity = Percentage::new(2.0);
+        assert_eq!(config.window_opacity(), 1.0);
+    }
+
+    #[test]
+    fn hint_bindings_are_generated_only_for_bound_hints() {
+        let mut config = UiConfig::default();
+        let before = config.key_bindings().len();
+        config.generate_hint_bindings();
+        assert_eq!(config.key_bindings().len(), before + 1);
+
+        config.hints.enabled.clear();
+        let before = config.key_bindings().len();
+        config.generate_hint_bindings();
+        assert_eq!(config.key_bindings().len(), before);
+    }
+
+    #[test]
+    fn hints_alphabet_validation_rejects_short_or_wide_characters() {
+        let alphabet: HintsAlphabet = serde_yaml::from_str("\"ab\"").unwrap();
+        assert_eq!(alphabet.0, "ab");
+        assert!(serde_yaml::from_str::<HintsAlphabet>("\"a\"").is_err());
+        assert!(serde_yaml::from_str::<HintsAlphabet>("\"中a\"").is_err());
+    }
+}

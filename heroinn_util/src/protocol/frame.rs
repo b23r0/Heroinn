@@ -38,3 +38,52 @@ pub fn write_frame<W: Write>(writer: &mut W, buf: &[u8]) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, ErrorKind};
+
+    #[test]
+    fn empty_and_unaligned_frames_round_trip() {
+        for payload in [
+            Vec::new(),
+            vec![0],
+            b"unaligned payload".to_vec(),
+            vec![0xa5; 4096],
+        ] {
+            let mut encoded = Vec::new();
+            write_frame(&mut encoded, &payload).unwrap();
+            assert_eq!(
+                u32::from_be_bytes(encoded[..4].try_into().unwrap()) as usize,
+                payload.len()
+            );
+            let mut cursor = Cursor::new(encoded);
+            assert_eq!(read_frame(&mut cursor).unwrap(), payload);
+        }
+    }
+
+    #[test]
+    fn truncated_prefix_and_payload_return_unexpected_eof() {
+        for bytes in [&b"\x00\x00"[..], &b"\x00\x00\x00\x04abc"[..]] {
+            let error = read_frame(&mut Cursor::new(bytes)).unwrap_err();
+            assert!(matches!(
+                error,
+                Error::Io(ref io) if io.kind() == ErrorKind::UnexpectedEof
+            ));
+        }
+    }
+
+    #[test]
+    fn oversized_frames_are_rejected_without_writing_a_partial_prefix() {
+        let mut writer = Vec::new();
+        let error = write_frame(&mut writer, &vec![0; MAX_PACKET + 1]).unwrap_err();
+        assert!(matches!(error, Error::PacketTooLarge(size) if size == MAX_PACKET + 1));
+        assert!(writer.is_empty());
+
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&((MAX_PACKET + 1) as u32).to_be_bytes());
+        let error = read_frame(&mut Cursor::new(encoded)).unwrap_err();
+        assert!(matches!(error, Error::PacketTooLarge(size) if size == MAX_PACKET + 1));
+    }
+}

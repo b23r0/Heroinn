@@ -1036,6 +1036,11 @@ mod tests {
         fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
+    #[cfg(windows)]
+    fn write_test_script(path: &Path, contents: &str) {
+        fs::write(path, contents.replace('\n', "\r\n")).unwrap();
+    }
+
     #[cfg(unix)]
     fn error_text_is_sanitized(text: &str) -> bool {
         !text
@@ -1083,6 +1088,59 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         panic!("grandchild {grandchild} survived worker cleanup");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_early_exit_error_contains_sanitized_stderr_tail() {
+        let directory = TempDir::new();
+        let path = directory.0.join("heroinn_shell.cmd");
+        write_test_script(
+            &path,
+            "@echo off\necho Error: Error creating GL context; eglInitialize failed 1>&2\nexit /b 1\n",
+        );
+
+        let error = match TermInstance::new_with_timeout(&path, "peer", Duration::from_secs(2)) {
+            Ok(_) => panic!("fake sidecar unexpectedly connected"),
+            Err(error) => error,
+        };
+        match error {
+            ShellLaunchError::ChildExited {
+                status: Some(status),
+                stderr,
+                ..
+            } => {
+                assert_eq!(status.code(), Some(1));
+                assert!(stderr.contains("eglInitialize failed"));
+                assert!(!stderr.chars().any(char::is_control));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_handshake_timeout_keeps_classification_and_includes_stderr() {
+        let directory = TempDir::new();
+        let path = directory.0.join("heroinn_shell.cmd");
+        write_test_script(
+            &path,
+            "@echo off\necho EGL initialization stalled 1>&2\nping -n 30 127.0.0.1 >NUL\n",
+        );
+
+        let started = Instant::now();
+        let error = match TermInstance::new_with_timeout(&path, "peer", Duration::from_millis(150))
+        {
+            Ok(_) => panic!("unresponsive fake sidecar unexpectedly connected"),
+            Err(error) => error,
+        };
+        assert!(started.elapsed() < Duration::from_secs(3));
+        match error {
+            ShellLaunchError::HandshakeTimeout { stderr, .. } => {
+                assert!(stderr.contains("EGL initialization stalled"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
     }
 
     #[cfg(unix)]

@@ -370,10 +370,28 @@ fn accept_control(
     listener: &TcpListener,
     child: &mut Child,
 ) -> std::result::Result<TcpStream, SidecarProcessError> {
+    accept_control_with(listener, ACCEPT_TIMEOUT, POLL_INTERVAL, || {
+        child
+            .try_wait()
+            .ok()
+            .flatten()
+            .map(|status| status.to_string())
+    })
+}
+
+fn accept_control_with<F>(
+    listener: &TcpListener,
+    timeout: Duration,
+    poll_interval: Duration,
+    mut child_exit: F,
+) -> std::result::Result<TcpStream, SidecarProcessError>
+where
+    F: FnMut() -> Option<String>,
+{
     listener
         .set_nonblocking(true)
         .map_err(|error| SidecarProcessError::Handshake(error.to_string()))?;
-    let deadline = Instant::now() + ACCEPT_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         match listener.accept() {
             Ok((socket, _)) => {
@@ -386,7 +404,7 @@ fn accept_control(
                 return Ok(socket);
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                if let Ok(Some(status)) = child.try_wait() {
+                if let Some(status) = child_exit() {
                     return Err(SidecarProcessError::Handshake(format!(
                         "sidecar exited before connecting back: {status}"
                     )));
@@ -396,7 +414,7 @@ fn accept_control(
                         "sidecar did not connect back within 10 seconds".to_string(),
                     ));
                 }
-                thread::sleep(POLL_INTERVAL);
+                thread::sleep(poll_interval);
             }
             Err(error) => return Err(SidecarProcessError::Handshake(error.to_string())),
         }
@@ -517,6 +535,61 @@ mod tests {
         let _ = fs::remove_dir_all(second);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn locator_rejects_non_executable_files_and_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("nonexec");
+        let worker = dir.join("worker");
+        fs::write(&worker, b"not executable").unwrap();
+        fs::set_permissions(&worker, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            locate_in(std::slice::from_ref(&dir), "worker"),
+            Err(SidecarProcessError::NotExecutable(path)) if path == worker
+        ));
+
+        fs::remove_file(&worker).unwrap();
+        fs::create_dir(dir.join("worker")).unwrap();
+        assert!(matches!(
+            locate_in(std::slice::from_ref(&dir), "worker"),
+            Err(SidecarProcessError::NotExecutable(_))
+        ));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stderr_line_sanitizes_controls_and_enforces_the_byte_limit() {
+        let output = Arc::new(Mutex::new(VecDeque::new()));
+        push_stderr_line(&output, b"  hello\x00world\r\n");
+        push_stderr_line(&output, "x".repeat(4096).as_bytes());
+        let output = hlock(&output);
+        assert_eq!(output[0], "hello world");
+        assert!(output[1].len() <= 1024);
+        assert!(!output.iter().any(|line| line.chars().any(char::is_control)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn early_exiting_child_is_reported_without_waiting_for_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 7"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let started = Instant::now();
+        let error = accept_control(&listener, &mut child).unwrap_err();
+        assert!(matches!(
+            error,
+            SidecarProcessError::Handshake(message) if message.contains("exited before connecting back")
+        ));
+        assert!(started.elapsed() < ACCEPT_TIMEOUT);
+        let _ = child.wait();
+    }
+
     #[test]
     fn stderr_ring_is_bounded_and_sanitized() {
         let output = Arc::new(Mutex::new(VecDeque::new()));
@@ -527,5 +600,212 @@ mod tests {
         assert!(output.len() <= STDERR_LIMIT_LINES);
         assert!(output.iter().map(String::len).sum::<usize>() <= STDERR_LIMIT_BYTES);
         assert!(!output.iter().any(|line| line.contains('\n')));
+    }
+
+    #[test]
+    fn sidecar_error_display_covers_every_stable_category() {
+        let not_found = SidecarProcessError::NotFound(vec![
+            PathBuf::from("/tmp/one"),
+            PathBuf::from("/tmp/two"),
+        ]);
+        assert!(not_found.to_string().contains("socks5_sidecar_not_found"));
+        assert!(not_found.to_string().contains("/tmp/one"));
+
+        let not_executable = SidecarProcessError::NotExecutable(PathBuf::from("/tmp/worker"));
+        assert!(
+            not_executable
+                .to_string()
+                .contains("socks5_sidecar_not_executable")
+        );
+        assert_eq!(
+            SidecarProcessError::Spawn("spawn detail".to_string()).to_string(),
+            "socks5_sidecar_spawn_failed: spawn detail"
+        );
+        assert_eq!(
+            SidecarProcessError::Handshake("handshake detail".to_string()).to_string(),
+            "socks5_sidecar_handshake_failed: handshake detail"
+        );
+        assert_eq!(
+            SidecarProcessError::Protocol("protocol detail".to_string()).to_string(),
+            "socks5_sidecar_protocol_error: protocol detail"
+        );
+    }
+
+    #[test]
+    fn binary_name_and_directory_candidates_are_consistent() {
+        let name = sidecar_binary_name();
+        if cfg!(target_os = "windows") {
+            assert!(name.ends_with(".exe"));
+        } else {
+            assert!(!name.ends_with(".exe"));
+        }
+        assert!(!sidecar_dirs().is_empty());
+    }
+
+    #[test]
+    fn public_locator_wrappers_agree_on_sidecar_presence() {
+        assert_eq!(sidecar_available(), locate_sidecar().is_ok());
+    }
+
+    #[test]
+    fn accept_control_uses_the_default_timeout_and_detects_a_late_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let connector = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            let _ = TcpStream::connect(address);
+        });
+        let mut child = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
+                .spawn()
+                .unwrap()
+        } else {
+            Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap()
+        };
+        let socket = accept_control(&listener, &mut child).unwrap();
+        drop(socket);
+        connector.join().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn accept_control_with_accepts_a_late_client_connection() {
+        use std::io::Write;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            let mut socket = TcpStream::connect(address).unwrap();
+            socket.write_all(b"x").unwrap();
+            thread::sleep(Duration::from_millis(100));
+        });
+
+        let mut socket = accept_control_with(
+            &listener,
+            Duration::from_secs(2),
+            Duration::from_millis(10),
+            || None,
+        )
+        .unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut byte = [0u8; 1];
+        socket.read_exact(&mut byte).unwrap();
+        assert_eq!(byte[0], b'x');
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn accept_control_with_reports_early_exit_and_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let started = Instant::now();
+        let error = accept_control_with(
+            &listener,
+            Duration::from_secs(2),
+            Duration::from_millis(5),
+            || Some("exit status: 7".to_string()),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            SidecarProcessError::Handshake(message)
+                if message.contains("exited before connecting back")
+        ));
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        let started = Instant::now();
+        let error = accept_control_with(
+            &listener,
+            Duration::from_millis(100),
+            Duration::from_millis(5),
+            || None,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            SidecarProcessError::Handshake(message) if message.contains("did not connect back")
+        ));
+        assert!(started.elapsed() >= Duration::from_millis(90));
+    }
+
+    #[test]
+    fn drain_stderr_collects_lines_and_flushes_a_partial_tail() {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "(echo alpha& echo beta) 1>&2"]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", "printf 'alpha\\nbeta' >&2"]);
+            command
+        };
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let output = Arc::new(Mutex::new(VecDeque::new()));
+        drain_stderr(stderr, output.clone());
+        let _ = child.wait();
+        let output = hlock(&output);
+        let lines = output.iter().cloned().collect::<Vec<_>>();
+        assert!(lines.len() >= 2);
+        assert!(lines.iter().any(|line| line.contains("alpha")));
+        assert!(lines.iter().any(|line| line.contains("beta")));
+        assert!(!lines.iter().any(|line| line.contains('\n')));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_guard_close_reaps_a_grouped_child_and_is_idempotent() {
+        use std::os::unix::process::CommandExt;
+
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let mut process = SidecarProcess {
+            guard: ProcessGuard::new(child, stderr),
+        };
+        assert!(process.alive());
+        process.close();
+        assert!(!process.alive());
+        process.close();
+        assert!(!process.alive());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_guard_close_reaps_a_windows_child_and_is_idempotent() {
+        let mut command = Command::new("cmd");
+        command
+            .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let mut process = SidecarProcess {
+            guard: ProcessGuard::new(child, stderr),
+        };
+        assert!(process.alive());
+        process.close();
+        assert!(!process.alive());
+        process.close();
+        assert!(!process.alive());
     }
 }
