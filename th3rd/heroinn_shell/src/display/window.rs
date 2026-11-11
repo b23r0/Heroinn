@@ -18,11 +18,7 @@ use {
 #[rustfmt::skip]
 #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
 use {
-    std::io::Cursor,
-
     x11_dl::xlib::{Display as XDisplay, PropModeReplace, XErrorEvent, Xlib},
-    glutin::window::Icon,
-    png::Decoder,
 };
 
 use std::fmt::{self, Display, Formatter};
@@ -36,33 +32,20 @@ use glutin::dpi::{PhysicalPosition, PhysicalSize};
 use glutin::event_loop::EventLoopWindowTarget;
 #[cfg(target_os = "macos")]
 use glutin::platform::macos::{WindowBuilderExtMacOS, WindowExtMacOS};
-#[cfg(windows)]
-use glutin::platform::windows::IconExtWindows;
 use glutin::window::{
     CursorIcon, Fullscreen, UserAttentionType, Window as GlutinWindow, WindowBuilder, WindowId,
 };
 use glutin::{self, ContextBuilder, PossiblyCurrent, Rect, WindowedContext};
+use heroinn_shell_terminal::index::Point;
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
 #[cfg(target_os = "macos")]
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-#[cfg(windows)]
-use winapi::shared::minwindef::WORD;
-
-use heroinn_shell_terminal::index::Point;
 
 use crate::config::window::{Decorations, Identity, WindowConfig};
 use crate::config::UiConfig;
 use crate::display::SizeInfo;
 use crate::gl;
-
-/// Window icon for `_NET_WM_ICON` property.
-#[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
-static WINDOW_ICON: &[u8] = include_bytes!("../../heroinn_shell.png");
-
-/// This should match the definition of IDI_ICON from `windows.rc`.
-#[cfg(windows)]
-const IDI_ICON: WORD = 0x101;
 
 /// Context creation flags from probing config.
 static GL_CONTEXT_CREATION_FLAGS: AtomicU8 = AtomicU8::new(GlContextFlags::SRGB.bits());
@@ -321,20 +304,9 @@ impl Window {
 
     #[cfg(not(any(target_os = "macos", windows)))]
     pub fn get_platform_window(identity: &Identity, window_config: &WindowConfig) -> WindowBuilder {
-        #[cfg(feature = "x11")]
-        let icon = {
-            let decoder = Decoder::new(Cursor::new(WINDOW_ICON));
-            let mut reader = decoder.read_info().expect("invalid embedded icon");
-            let buffer_size = reader.output_buffer_size().expect("unsupported embedded icon size");
-            let mut buf = vec![0; buffer_size];
-            let _ = reader.next_frame(&mut buf);
-            let info = reader.info();
-            Icon::from_rgba(buf, info.width, info.height)
-        };
-
         let full_title;
-        if let Some(subtitle) = window_config.sub_title.clone(){
-            full_title = format!("{} - {}", identity.title , subtitle);
+        if let Some(subtitle) = window_config.sub_title.clone() {
+            full_title = format!("{} - {}", identity.title, subtitle);
         } else {
             full_title = identity.title.clone();
         }
@@ -346,9 +318,6 @@ impl Window {
             .with_decorations(window_config.decorations != Decorations::None)
             .with_maximized(window_config.maximized())
             .with_fullscreen(window_config.fullscreen());
-
-        #[cfg(feature = "x11")]
-        let builder = builder.with_window_icon(icon.ok());
 
         #[cfg(feature = "wayland")]
         let builder = builder.with_app_id(identity.class.instance.to_owned());
@@ -368,11 +337,9 @@ impl Window {
 
     #[cfg(windows)]
     pub fn get_platform_window(identity: &Identity, window_config: &WindowConfig) -> WindowBuilder {
-        let icon = glutin::window::Icon::from_resource(IDI_ICON, None);
-
         let full_title;
-        if let Some(subtitle) = window_config.sub_title.clone(){
-            full_title = format!("{} - {}", identity.title , subtitle);
+        if let Some(subtitle) = window_config.sub_title.clone() {
+            full_title = format!("{} - {}", identity.title, subtitle);
         } else {
             full_title = identity.title.clone();
         }
@@ -384,15 +351,13 @@ impl Window {
             .with_transparent(true)
             .with_maximized(window_config.maximized())
             .with_fullscreen(window_config.fullscreen())
-            .with_window_icon(icon.ok())
     }
 
     #[cfg(target_os = "macos")]
     pub fn get_platform_window(identity: &Identity, window_config: &WindowConfig) -> WindowBuilder {
-
         let full_title;
-        if let Some(subtitle) = window_config.sub_title.clone(){
-            full_title = format!("{} - {}", identity.title , subtitle);
+        if let Some(subtitle) = window_config.sub_title.clone() {
+            full_title = format!("{} - {}", identity.title, subtitle);
         } else {
             full_title = identity.title.clone();
         }

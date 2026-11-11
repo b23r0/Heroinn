@@ -116,9 +116,6 @@ JSON；如果模板中存在多个有效连接标记，生成器会拒绝处理�
 | `th3rd/heroinn_ftp` | 文件管理器 |
 | `th3rd/heroinn_socks5proxy` | 反弹 SOCKS5 代理 GUI 与 sidecar |
 | `th3rd/heroinn_shell` | `heroinn_shell` 使用的终端实现 |
-| `th3rd/heroinn_shell/heroinn_shell_terminal` | 仓库内置终端引擎 |
-| `th3rd/heroinn_shell/heroinn_shell_config_derive` | 终端配置反序列化派生宏 |
-| `th3rd/heroinn_conpty` | 仓库内置的 Windows ConPTY 支持 |
 
 项目自身 crate 使用 edition 2024，依赖版本统一固定在 workspace 根目录的
 `[workspace.dependencies]` 中；仓库内置的终端 crate 保留上游 edition。

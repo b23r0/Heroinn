@@ -1,7 +1,8 @@
 [package]
 name = "conpty"
-version = "0.3.0"
+version = "0.7.0"
 edition = "2021"
+rust-version = "1.95"
 publish = false
 authors = ["Maxim Zhiburt <zhiburt@gmail.com>"]
 description = "A library which provides an interface for ConPTY"
@@ -13,9 +14,8 @@ categories = ["os", "os::windows-apis"]
 keywords = ["win32", "ConPTY", "terminal", "shell"]
 
 [dependencies.windows]
-version = "0.29.0"
+version = "0.54.0"
 features = [
-    "alloc",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Threading",

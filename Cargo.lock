@@ -160,39 +160,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "heroinn_shell_config_derive"
-version = "0.1.0"
-dependencies = [
- "log 0.4.35",
- "proc-macro2",
- "quote",
- "serde",
- "serde_yaml",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "heroinn_shell_terminal"
-version = "0.17.0-dev"
-dependencies = [
- "heroinn_shell_config_derive",
- "base64 0.22.1",
- "bitflags 2.13.2",
- "dirs",
- "heroinn_shell_protocol",
- "libc 0.2.191",
- "log 0.4.35",
- "mio 1.2.4",
- "parking_lot 0.12.5",
- "regex-automata",
- "serde",
- "serde_json",
- "serde_yaml",
- "unicode-width",
- "vte",
-]
-
-[[package]]
 name = "aligned"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -996,9 +963,9 @@ dependencies = [
 
 [[package]]
 name = "conpty"
-version = "0.3.0"
+version = "0.7.0"
 dependencies = [
- "windows 0.29.0",
+ "windows 0.54.0",
 ]
 
 [[package]]
@@ -2313,6 +2280,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui_extras",
+ "embed-resource",
  "heroinn_core",
  "heroinn_util",
  "image",
@@ -2372,8 +2340,6 @@ dependencies = [
 name = "heroinn_shell"
 version = "0.1.0"
 dependencies = [
- "heroinn_shell_config_derive",
- "heroinn_shell_terminal",
  "bitflags 2.13.2",
  "cocoa",
  "copypasta",
@@ -2382,12 +2348,13 @@ dependencies = [
  "embed-resource",
  "fnv",
  "glutin 0.28.0",
+ "heroinn_shell_config_derive",
+ "heroinn_shell_terminal",
  "libc 0.2.191",
  "log 0.4.35",
  "notify",
  "objc",
  "parking_lot 0.12.5",
- "png",
  "raw-window-handle 0.4.3",
  "serde",
  "serde_json",
@@ -2400,8 +2367,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "heroinn_shell_config_derive"
+version = "0.1.0"
+dependencies = [
+ "log 0.4.35",
+ "proc-macro2",
+ "quote",
+ "serde",
+ "serde_yaml",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "heroinn_shell_protocol"
 version = "0.1.0"
+
+[[package]]
+name = "heroinn_shell_terminal"
+version = "0.17.0-dev"
+dependencies = [
+ "base64 0.22.1",
+ "bitflags 2.13.2",
+ "dirs",
+ "heroinn_shell_config_derive",
+ "heroinn_shell_protocol",
+ "libc 0.2.191",
+ "log 0.4.35",
+ "mio 1.2.4",
+ "parking_lot 0.12.5",
+ "regex-automata",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "unicode-width",
+ "vte",
+]
 
 [[package]]
 name = "heroinn_socks5proxy"
@@ -6792,7 +6792,7 @@ dependencies = [
  "wgpu-types",
  "windows 0.62.2",
  "windows-core 0.62.2",
- "windows-result",
+ "windows-result 0.4.1",
 ]
 
 [[package]]
@@ -6879,19 +6879,6 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aac7fef12f4b59cd0a29339406cc9203ab44e440ddff6b3f5a41455349fa9cf3"
-dependencies = [
- "windows_aarch64_msvc 0.29.0",
- "windows_i686_gnu 0.29.0",
- "windows_i686_msvc 0.29.0",
- "windows_x86_64_gnu 0.29.0",
- "windows_x86_64_msvc 0.29.0",
-]
-
-[[package]]
-name = "windows"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1c4bd0a50ac6020f65184721f758dba47bb9fbc2133df715ec74a237b26794a"
@@ -6901,6 +6888,16 @@ dependencies = [
  "windows_i686_msvc 0.39.0",
  "windows_x86_64_gnu 0.39.0",
  "windows_x86_64_msvc 0.39.0",
+]
+
+[[package]]
+name = "windows"
+version = "0.54.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252e5725dbed82865af151df558e754e4a3c2c30818359eb17465f1346a1b49"
+dependencies = [
+ "windows-core 0.54.0",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -6935,6 +6932,16 @@ dependencies = [
 
 [[package]]
 name = "windows-core"
+version = "0.54.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12661b9c89351d684a50a8a643ce5f608e20243b9fb84687800163429f161d65"
+dependencies = [
+ "windows-result 0.1.2",
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-core"
 version = "0.62.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
@@ -6942,7 +6949,7 @@ dependencies = [
  "windows-implement",
  "windows-interface",
  "windows-link",
- "windows-result",
+ "windows-result 0.4.1",
  "windows-strings",
 ]
 
@@ -6993,6 +7000,15 @@ checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
  "windows-core 0.62.2",
  "windows-link",
+]
+
+[[package]]
+name = "windows-result"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e383302e8ec8515204254685643de10811af0ed97ea37210dc26fb0032647f8"
+dependencies = [
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -7094,12 +7110,6 @@ checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
 
 [[package]]
 name = "windows_aarch64_msvc"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d027175d00b01e0cbeb97d6ab6ebe03b12330a35786cbaca5252b1c4bf5d9b"
-
-[[package]]
-name = "windows_aarch64_msvc"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7711666096bd4096ffa835238905bb33fb87267910e154b18b44eaabb340f2"
@@ -7115,12 +7125,6 @@ name = "windows_aarch64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
-
-[[package]]
-name = "windows_i686_gnu"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8793f59f7b8e8b01eda1a652b2697d87b93097198ae85f823b969ca5b89bba58"
 
 [[package]]
 name = "windows_i686_gnu"
@@ -7148,12 +7152,6 @@ checksum = "0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66"
 
 [[package]]
 name = "windows_i686_msvc"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8602f6c418b67024be2996c512f5f995de3ba417f4c75af68401ab8756796ae4"
-
-[[package]]
-name = "windows_i686_msvc"
 version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bc7cbfe58828921e10a9f446fcaaf649204dcfe6c1ddd712c5eebae6bda1106"
@@ -7169,12 +7167,6 @@ name = "windows_i686_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
-
-[[package]]
-name = "windows_x86_64_gnu"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3d615f419543e0bd7d2b3323af0d86ff19cbc4f816e6453f36a2c2ce889c354"
 
 [[package]]
 name = "windows_x86_64_gnu"
@@ -7205,12 +7197,6 @@ name = "windows_x86_64_gnullvm"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
-
-[[package]]
-name = "windows_x86_64_msvc"
-version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11d95421d9ed3672c280884da53201a5c46b7b2765ca6faf34b0d71cf34a3561"
 
 [[package]]
 name = "windows_x86_64_msvc"

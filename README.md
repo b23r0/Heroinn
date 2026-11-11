@@ -124,9 +124,6 @@ and the generator rejects templates containing more than one valid stamp.
 | `th3rd/heroinn_ftp` | File manager |
 | `th3rd/heroinn_socks5proxy` | Reverse SOCKS5 proxy GUI and sidecar |
 | `th3rd/heroinn_shell` | Terminal implementation used by `heroinn_shell` |
-| `th3rd/heroinn_shell/heroinn_shell_terminal` | Vendored terminal engine |
-| `th3rd/heroinn_shell/heroinn_shell_config_derive` | Terminal configuration derive macro |
-| `th3rd/heroinn_conpty` | Vendored Windows ConPTY support |
 
 First-party crates use edition 2024 and share dependency versions pinned at the
 workspace root in `[workspace.dependencies]`. Vendored terminal crates retain

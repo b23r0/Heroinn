@@ -41,9 +41,6 @@ dirs = "6"
 [target.'cfg(not(windows))'.dependencies]
 xdg = "2.4.0"
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
-png = { version = "0.18", default-features = false, optional = true }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 raw-window-handle = "0.4.0"
 cocoa = "0.24.0"
@@ -61,5 +58,5 @@ embed-resource = "1.3"
 
 [features]
 default = ["wayland", "x11"]
-x11 = ["copypasta/x11", "glutin/x11", "x11-dl", "png"]
+x11 = ["copypasta/x11", "glutin/x11", "x11-dl"]
 wayland = ["copypasta/wayland", "glutin/wayland", "glutin/wayland-dlopen", "wayland-client"]

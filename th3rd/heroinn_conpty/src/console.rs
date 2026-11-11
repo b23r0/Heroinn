@@ -1,16 +1,25 @@
-use windows::core as win;
-use windows::Win32::System::Console::{
-    GetConsoleMode, GetStdHandle, SetConsoleMode, DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT,
-    ENABLE_EXTENDED_FLAGS, ENABLE_INSERT_MODE, ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT,
-    ENABLE_PROCESSED_INPUT, ENABLE_QUICK_EDIT_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT,
-    STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+//! Module contains a handy functions for terminal.
+
+use windows::core::Result as WinResult;
+use windows::Win32::Foundation::WAIT_OBJECT_0;
+use windows::Win32::{
+    Foundation::HANDLE,
+    System::{
+        Console::{
+            GetConsoleMode, GetStdHandle, SetConsoleMode, CONSOLE_MODE,
+            DISABLE_NEWLINE_AUTO_RETURN, ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS,
+            ENABLE_INSERT_MODE, ENABLE_LINE_INPUT, ENABLE_MOUSE_INPUT, ENABLE_PROCESSED_INPUT,
+            ENABLE_QUICK_EDIT_MODE, ENABLE_VIRTUAL_TERMINAL_INPUT, STD_ERROR_HANDLE,
+            STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        },
+        Threading::WaitForSingleObject,
+    },
 };
-use windows::Win32::System::Threading::{WaitForSingleObject, WAIT_OBJECT_0};
-use windows::Win32::{Foundation::HANDLE, System::Console::CONSOLE_MODE};
 
 use crate::error::Error;
 
 /// Console represents a terminal session with opened stdin, stdout and stderr.
+#[derive(Debug, Clone)]
 pub struct Console {
     stdin: HANDLE,
     stdout: HANDLE,
@@ -26,9 +35,9 @@ impl Console {
         // We don't close these handle on drop because:
         //  It is not required to CloseHandle when done with the handle retrieved from GetStdHandle.
         //  The returned value is simply a copy of the value stored in the process table.
-        let stdin = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-        let stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
-        let stderr = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+        let stdin = unsafe { GetStdHandle(STD_INPUT_HANDLE)? };
+        let stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE)? };
+        let stderr = unsafe { GetStdHandle(STD_ERROR_HANDLE)? };
 
         let stdin_mode = get_console_mode(stdin)?;
         let stdout_mode = get_console_mode(stdout)?;
@@ -50,10 +59,10 @@ impl Console {
         set_raw_stdin(self.stdin, self.stdin_mode)?;
 
         unsafe {
-            SetConsoleMode(self.stdout, self.stdout_mode | DISABLE_NEWLINE_AUTO_RETURN).ok()?;
+            SetConsoleMode(self.stdout, self.stdout_mode | DISABLE_NEWLINE_AUTO_RETURN)?;
         }
         unsafe {
-            SetConsoleMode(self.stderr, self.stderr_mode | DISABLE_NEWLINE_AUTO_RETURN).ok()?;
+            SetConsoleMode(self.stderr, self.stderr_mode | DISABLE_NEWLINE_AUTO_RETURN)?;
         }
 
         Ok(())
@@ -62,7 +71,7 @@ impl Console {
     /// Sets terminal in a mode which was initially used on handles.
     pub fn reset(&self) -> Result<(), Error> {
         for (handle, mode) in self.streams() {
-            unsafe { SetConsoleMode(handle, mode).ok()? };
+            unsafe { SetConsoleMode(handle, mode)? };
         }
 
         Ok(())
@@ -86,15 +95,15 @@ impl Console {
     }
 }
 
-fn get_console_mode(h: HANDLE) -> win::Result<CONSOLE_MODE> {
+fn get_console_mode(h: HANDLE) -> WinResult<CONSOLE_MODE> {
     let mut mode = CONSOLE_MODE::default();
     unsafe {
-        GetConsoleMode(h, &mut mode).ok()?;
+        GetConsoleMode(h, &mut mode)?;
     }
     Ok(mode)
 }
 
-fn set_raw_stdin(stdin: HANDLE, mut mode: CONSOLE_MODE) -> win::Result<()> {
+fn set_raw_stdin(stdin: HANDLE, mut mode: CONSOLE_MODE) -> WinResult<()> {
     mode &= !ENABLE_ECHO_INPUT;
     mode &= !ENABLE_LINE_INPUT;
     mode &= !ENABLE_MOUSE_INPUT;
@@ -105,13 +114,13 @@ fn set_raw_stdin(stdin: HANDLE, mut mode: CONSOLE_MODE) -> win::Result<()> {
     mode |= ENABLE_INSERT_MODE;
     mode |= ENABLE_QUICK_EDIT_MODE;
 
-    let vtInputSupported = true;
-    if vtInputSupported {
+    let vt_input_supported = true;
+    if vt_input_supported {
         mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
     }
 
     unsafe {
-        SetConsoleMode(stdin, mode).ok()?;
+        SetConsoleMode(stdin, mode)?;
     }
 
     Ok(())

@@ -17,10 +17,17 @@ use heroinn_util::Result;
 use heroinn_util::session::{ClientSession, Session, SessionBase, SessionPacket};
 
 #[cfg(target_os = "windows")]
-use windows::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+use windows::Win32::Foundation::CloseHandle;
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
 
 #[cfg(target_os = "windows")]
 use conpty::*;
+
+#[cfg(target_os = "windows")]
+fn windows_shell_command() -> std::process::Command {
+    std::process::Command::new("cmd.exe")
+}
 
 /// A live shell on the client side.
 pub struct ShellClient {
@@ -101,7 +108,7 @@ impl ClientSession for ShellClient {
         let closed = Arc::new(AtomicBool::new(false));
         let close_sent = Arc::new(AtomicBool::new(false));
 
-        let process = conpty::spawn("cmd")
+        let mut process = Process::spawn(windows_shell_command())
             .map_err(|e| Error::Other(format!("spawn conpty failed : {}", e)))?;
 
         let pid = process.pid();
@@ -111,22 +118,20 @@ impl ClientSession for ShellClient {
         let close_sent_exit = close_sent.clone();
         let sender_exit = sender.clone();
         std::thread::spawn(move || {
-            let handle = match unsafe {
-                OpenProcess(
-                    windows::Win32::System::Threading::PROCESS_ALL_ACCESS,
-                    false,
-                    pid,
-                )
-            } {
+            let handle = match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
                 Ok(p) => p,
                 Err(e) => {
                     log::info!("open shell process error : {}", e);
+                    send_close_once(&sender_exit, &id_exit, &clientid_exit, &close_sent_exit);
                     return;
                 }
             };
 
             if !handle.is_invalid() {
-                unsafe { WaitForSingleObject(handle, 0xffffffff) };
+                unsafe {
+                    WaitForSingleObject(handle, u32::MAX);
+                    let _ = CloseHandle(handle);
+                }
             }
 
             log::info!("shell process exit");
@@ -413,6 +418,19 @@ impl Session for ShellClient {
         }
 
         self.closed.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::windows_shell_command;
+
+    #[test]
+    fn windows_shell_command_is_interactive_cmd() {
+        let command = windows_shell_command();
+        assert_eq!(command.get_program(), "cmd.exe");
+        assert_eq!(command.get_args().count(), 0);
+        assert!(!command.get_args().any(|argument| argument == "/C"));
     }
 }
 

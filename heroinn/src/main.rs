@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 mod controller;
 mod host_view;
+mod icon;
 mod msgbox;
 use host_view::{HOST_COLUMNS, HOST_ROW_HEIGHT, host_table_min_width};
 
@@ -209,7 +210,9 @@ fn main() {
         ::log::set_max_level(log::LevelFilter::Debug);
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1375.0, 610.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1375.0, 610.0])
+            .with_icon(std::sync::Arc::new(icon::runtime_icon())),
         ..Default::default()
     };
     eframe::run_native(
@@ -221,6 +224,7 @@ fn main() {
 }
 struct HeroinnApp {
     initilized: bool,
+    viewport_icon_initialized: bool,
     switch: SwitchDock,
     resizable: bool,
     text_listen_port: String,
@@ -243,6 +247,7 @@ impl Default for HeroinnApp {
     fn default() -> Self {
         Self {
             initilized: false,
+            viewport_icon_initialized: false,
             switch: SwitchDock::Hosts,
             resizable: true,
             text_listen_port: String::new(),
@@ -326,6 +331,13 @@ fn socks5_from_generator_fields(
 impl eframe::App for HeroinnApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+
+        if !self.viewport_icon_initialized {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(
+                icon::runtime_icon(),
+            ))));
+            self.viewport_icon_initialized = true;
+        }
 
         if !self.initilized {
             ctx.set_theme(egui::Theme::Dark);
