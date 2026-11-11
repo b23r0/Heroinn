@@ -290,6 +290,51 @@ impl OutboundStream {
         }
     }
 
+    /// Apply a short read timeout to the blocking transport. WebSocket uses
+    /// this to poll its bounded send queue without holding a lock across a
+    /// blocking read. Other callers keep the default blocking behaviour.
+    pub(crate) fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        match &*self.inner {
+            Inner::Plain(plain) => plain.stream.set_read_timeout(timeout),
+            Inner::Tls(tls) => {
+                tls.shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .read_timeout = timeout;
+                tls.shared.readable.notify_all();
+                Ok(())
+            }
+        }
+    }
+
+    /// Apply a bounded write timeout to the blocking transport. WebSocket
+    /// actors use this so a stalled peer cannot prevent deterministic
+    /// cancellation. Other callers keep the default blocking behaviour.
+    pub(crate) fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        match &*self.inner {
+            Inner::Plain(plain) => plain.stream.set_write_timeout(timeout),
+            Inner::Tls(tls) => {
+                tls.shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .write_timeout = timeout;
+                tls.shared.writable.notify_all();
+                Ok(())
+            }
+        }
+    }
+
+    /// Switch the plain socket between blocking and polling handshake modes.
+    /// The TLS driver is already nonblocking; its consumers use condvar timeouts.
+    pub(crate) fn set_nonblocking(&self, enabled: bool) -> io::Result<()> {
+        match &*self.inner {
+            Inner::Plain(plain) => plain.stream.set_nonblocking(enabled),
+            Inner::Tls(_) => Ok(()),
+        }
+    }
+
     pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
         match &*self.inner {
             Inner::Plain(plain) => plain.stream.shutdown(how),
@@ -450,11 +495,25 @@ impl TlsIo {
             {
                 return Ok(0);
             }
-            state = self
-                .shared
-                .readable
-                .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = if let Some(timeout) = state.read_timeout {
+                let (next, wait) = self
+                    .shared
+                    .readable
+                    .wait_timeout(state, timeout)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if wait.timed_out() && next.incoming.is_empty() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "TLS read timed out",
+                    ));
+                }
+                next
+            } else {
+                self.shared
+                    .readable
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+            };
         }
     }
 
@@ -506,19 +565,49 @@ impl TlsIo {
                     if state.outgoing_bytes == 0 {
                         return Ok(count);
                     }
-                    state = self
-                        .shared
-                        .writable
-                        .wait(state)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if let Some(timeout) = state.write_timeout {
+                        let (next, wait) = self
+                            .shared
+                            .writable
+                            .wait_timeout(state, timeout)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if wait.timed_out() && next.outgoing_bytes != 0 {
+                            // The bytes were accepted into the bounded queue.
+                            // `flush` remains responsible for confirming that
+                            // the TLS driver actually wrote them.
+                            return Ok(count);
+                        }
+                        state = next;
+                    } else {
+                        state = self
+                            .shared
+                            .writable
+                            .wait(state)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    }
                 }
             }
 
-            state = self
-                .shared
-                .writable
-                .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(timeout) = state.write_timeout {
+                let (next, wait) = self
+                    .shared
+                    .writable
+                    .wait_timeout(state, timeout)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if wait.timed_out() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "TLS write timed out waiting for buffer space",
+                    ));
+                }
+                state = next;
+            } else {
+                state = self
+                    .shared
+                    .writable
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
         }
     }
 
@@ -542,11 +631,26 @@ impl TlsIo {
                     "TLS connection closed before queued data was flushed",
                 ));
             }
-            state = self
-                .shared
-                .writable
-                .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(timeout) = state.write_timeout {
+                let (next, wait) = self
+                    .shared
+                    .writable
+                    .wait_timeout(state, timeout)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if wait.timed_out() && next.outgoing_bytes != 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "TLS flush timed out",
+                    ));
+                }
+                state = next;
+            } else {
+                state = self
+                    .shared
+                    .writable
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
         }
         if let Some(error) = &state.error {
             return Err(error.to_io());
@@ -707,6 +811,8 @@ struct TlsState {
     incoming: VecDeque<u8>,
     outgoing: VecDeque<Vec<u8>>,
     outgoing_bytes: usize,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
     read_closed: bool,
     write_closed: bool,
     closed: bool,

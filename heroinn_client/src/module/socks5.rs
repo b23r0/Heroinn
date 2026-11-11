@@ -341,7 +341,11 @@ fn run_stream(
 
     let (bytes_to_target, bytes_from_target) = pump_stream(&target, &tunnel, cancel.clone());
     let _ = target.shutdown(Shutdown::Both);
-    let _ = tunnel.shutdown(Shutdown::Both);
+    // `send` enqueues Binary frames for the WebSocket actor.  A raw socket
+    // shutdown here would race that writer and truncate the final target
+    // payload and FIN.  The transport's close path drains the queue, flushes
+    // the close frame and joins the actor without waiting indefinitely.
+    tunnel.close();
     send_client_event(
         &outgoing,
         &clientid,
@@ -533,6 +537,7 @@ fn hlock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use heroinn_util::protocol::http::WSServer;
     use heroinn_util::protocol::tcp::TcpServer;
     use heroinn_util::socks5::{
         Socks5ClientEvent, Socks5ServerCommand, Socks5ServerOpen, Socks5Target, Socks5TunnelFrame,
@@ -681,6 +686,99 @@ mod tests {
             Socks5TunnelFrame::read_from(&mut tunnel).unwrap(),
             Socks5TunnelFrame::Fin
         );
+        target_worker.join().unwrap();
+
+        manager.handle(Socks5ServerCommand::Shutdown {
+            session_id: "session".to_string(),
+        });
+        manager.close_all();
+        server.close();
+    }
+
+    #[test]
+    fn manager_flushes_the_echo_and_fin_through_a_websocket_tunnel() {
+        let payload = (0..64 * 1024)
+            .map(|index| (index * 17 + 3) as u8)
+            .collect::<Vec<_>>();
+
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let target_address = target_listener.local_addr().unwrap();
+        let target_payload = payload.clone();
+        let target_worker = std::thread::spawn(move || {
+            let (mut target, _) = target_listener.accept().unwrap();
+            target
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut received = vec![0u8; target_payload.len()];
+            target.read_exact(&mut received).unwrap();
+            assert_eq!(received, target_payload);
+            target.write_all(&target_payload).unwrap();
+            let _ = target.shutdown(Shutdown::Write);
+        });
+
+        let sidecar_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let sidecar_port = sidecar_listener.local_addr().unwrap().port();
+        let mut server = WSServer::new("127.0.0.1:0", Arc::new(|_| {})).unwrap();
+        let server_address = server.local_addr().unwrap().to_string();
+        let (sender, receiver) = mpsc::channel();
+        let mut manager = Socks5Manager::new(
+            "client",
+            HeroinnProtocol::HTTP,
+            &server_address,
+            Some(FrozenRoute::direct()),
+            Arc::new(TransportFactory::direct()),
+            sender,
+        );
+        manager.handle(Socks5ServerCommand::Start {
+            session_id: "session".to_string(),
+        });
+        manager.handle(Socks5ServerCommand::Open(Socks5ServerOpen {
+            session_id: "session".to_string(),
+            stream_id: 7,
+            target: Socks5Target::new(&target_address.ip().to_string(), target_address.port())
+                .unwrap(),
+            tunnel_port: sidecar_port,
+        }));
+
+        let (mut sidecar_tunnel, _) = sidecar_listener.accept().unwrap();
+        sidecar_tunnel
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        assert_eq!(
+            Socks5TunnelFrame::read_from(&mut sidecar_tunnel).unwrap(),
+            Socks5TunnelFrame::Hello { stream_id: 7 }
+        );
+        let accepted = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("open result");
+        let frame = Message::new(
+            "127.0.0.1:1".parse().unwrap(),
+            HeroinnProtocol::HTTP,
+            &accepted,
+        )
+        .unwrap();
+        assert!(matches!(
+            frame.parse_socks5_client_event().unwrap(),
+            Socks5ClientEvent::OpenResult { accepted: true, .. }
+        ));
+
+        Socks5TunnelFrame::Data(payload.clone())
+            .write_to(&mut sidecar_tunnel)
+            .unwrap();
+        Socks5TunnelFrame::Fin
+            .write_to(&mut sidecar_tunnel)
+            .unwrap();
+
+        let mut echoed = Vec::new();
+        let mut saw_fin = false;
+        while !saw_fin {
+            match Socks5TunnelFrame::read_from(&mut sidecar_tunnel).unwrap() {
+                Socks5TunnelFrame::Data(data) => echoed.extend_from_slice(&data),
+                Socks5TunnelFrame::Fin => saw_fin = true,
+                other => panic!("unexpected tunnel frame: {other:?}"),
+            }
+        }
+        assert_eq!(echoed, payload);
         target_worker.join().unwrap();
 
         manager.handle(Socks5ServerCommand::Shutdown {
