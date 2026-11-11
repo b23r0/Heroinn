@@ -142,6 +142,7 @@ are welcome. Before opening a pull request, run the same checks used by CI:
 
 ```sh
 cargo fmt -p heroinn_ftp -- --check
+cargo metadata --format-version 1 --locked --no-deps
 cargo check --workspace --lib --bins --locked
 cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp -p heroinn_socks5proxy --all-targets --locked -- -D warnings
 cargo test --workspace --exclude alacritty_terminal --locked

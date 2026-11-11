@@ -132,6 +132,7 @@ JSON；如果模板中存在多个有效连接标记，生成器会拒绝处理�
 
 ```sh
 cargo fmt -p heroinn_ftp -- --check
+cargo metadata --format-version 1 --locked --no-deps
 cargo check --workspace --lib --bins --locked
 cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp -p heroinn_socks5proxy --all-targets --locked -- -D warnings
 cargo test --workspace --exclude alacritty_terminal --locked
