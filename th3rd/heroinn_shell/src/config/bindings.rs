@@ -9,11 +9,11 @@ use serde::de::{self, Error as SerdeError, MapAccess, Unexpected, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_yaml::Value as SerdeValue;
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
-use alacritty_terminal::config::Program;
-use alacritty_terminal::term::TermMode;
-use alacritty_terminal::vi_mode::ViMotion;
+use heroinn_shell_terminal::config::Program;
+use heroinn_shell_terminal::term::TermMode;
+use heroinn_shell_terminal::vi_mode::ViMotion;
 
 use crate::config::ui_config::Hint;
 
@@ -161,26 +161,26 @@ pub enum Action {
     /// Clear the display buffer(s) to remove history.
     ClearHistory,
 
-    /// Hide the Alacritty window.
+    /// Hide the Heroinn Shell window.
     Hide,
 
-    /// Hide all windows other than Alacritty on macOS.
+    /// Hide all windows other than Heroinn Shell on macOS.
     #[cfg(target_os = "macos")]
     HideOtherApplications,
 
-    /// Minimize the Alacritty window.
+    /// Minimize the Heroinn Shell window.
     Minimize,
 
-    /// Quit Alacritty.
+    /// Quit Heroinn Shell.
     Quit,
 
     /// Clear warning and error notices.
     ClearLogNotice,
 
-    /// Spawn a new instance of Alacritty.
+    /// Spawn a new instance of Heroinn Shell.
     SpawnNewInstance,
 
-    /// Create a new Alacritty window.
+    /// Create a new Heroinn Shell window.
     CreateNewWindow,
 
     /// Toggle fullscreen.

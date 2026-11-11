@@ -3,7 +3,7 @@ use std::ffi::c_void;
 
 use log::{debug, warn};
 
-use alacritty_terminal::term::ClipboardType;
+use heroinn_shell_terminal::term::ClipboardType;
 
 #[cfg(any(test, not(any(feature = "x11", target_os = "macos", windows))))]
 use copypasta::nop_clipboard::NopClipboardContext;

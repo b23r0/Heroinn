@@ -37,7 +37,7 @@ impl<T: GridCell + Default + PartialEq + Clone> Grid<T> {
 
     /// Add lines to the visible area.
     ///
-    /// Alacritty keeps the cursor at the bottom of the terminal as long as there
+    /// Heroinn Shell keeps the cursor at the bottom of the terminal as long as there
     /// is scrollback available. Once scrollback is exhausted, new lines are
     /// simply added to the bottom of the screen.
     fn grow_lines<D>(&mut self, target: usize)
@@ -74,7 +74,7 @@ impl<T: GridCell + Default + PartialEq + Clone> Grid<T> {
     /// bottom of the screen. This is achieved by pushing history "out the top"
     /// of the terminal window.
     ///
-    /// Alacritty takes the same approach.
+    /// Heroinn Shell takes the same approach.
     fn shrink_lines<D>(&mut self, target: usize)
     where
         T: ResetDiscriminant<D>,

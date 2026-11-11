@@ -6,9 +6,9 @@ use std::sync::OnceLock;
 use crossfont::Metrics;
 use log::info;
 
-use alacritty_terminal::index::Point;
-use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::color::Rgb;
+use heroinn_shell_terminal::index::Point;
+use heroinn_shell_terminal::term::cell::Flags;
+use heroinn_shell_terminal::term::color::Rgb;
 
 use crate::display::content::RenderableCell;
 use crate::display::SizeInfo;

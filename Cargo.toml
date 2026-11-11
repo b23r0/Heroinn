@@ -10,8 +10,8 @@ members = [
     # Vendored terminal implementation that backs interactive shell sessions.
     "th3rd/heroinn_shell",
     "th3rd/heroinn_shell/protocol",
-    "th3rd/heroinn_shell/alacritty_terminal",
-    "th3rd/heroinn_shell/alacritty_config_derive",
+    "th3rd/heroinn_shell/heroinn_shell_terminal",
+    "th3rd/heroinn_shell/heroinn_shell_config_derive",
 ]
 exclude = ["th3rd/heroinn_conpty"]
 

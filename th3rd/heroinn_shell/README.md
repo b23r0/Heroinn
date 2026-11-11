@@ -1,27 +1,25 @@
-# alacritty-driver
+# heroinn-shell-driver
 
-> Vendored into Heroinn from https://github.com/b23r0/alacritty-driver (commit
-> 99a87da), which forks alacritty 0.11.0-dev. The only local changes are that the
-> `alacritty` package and its binary target are renamed to `heroinn_shell`, and
-> that the nested workspace manifest was dropped so the crates build as members
-> of the Heroinn workspace. Upstream's Apache-2.0 license is kept in
-> `LICENSE-APACHE`.
+> Heroinn's server-side terminal implementation. The nested workspace manifest
+> was dropped so its terminal engine and configuration derive crates build as
+> members of the Heroinn workspace. The upstream Apache-2.0 attribution is
+> retained in `LICENSE-APACHE`.
 
 ## About
 
-alacritty-driver is an alacritty based driver. You can interact with alacritty in your program through TCP-based localsockets.
-
-About alacritty : https://github.com/alacritty/alacritty
+`heroinn-shell-driver` drives a remote PTY and connects to the server through a local
+TCP socket.
 
 ## Run Driver
 
 ```sh
-.\alacritty_driver.exe --local-socket-port [port]
+.\heroinn_shell.exe --local-socket-port [port]
 ```
 
 ## Set Window Size
 
-alacritty-driver will send packets in the following format to notify windows size changes
+`heroinn-shell-driver` sends packets in the following format to report window size
+changes:
 
 ```
 +-----------------+---------------------+---------------------+
@@ -33,6 +31,5 @@ alacritty-driver will send packets in the following format to notify windows siz
 
 ## License
 
-alacritty-driver license inherited from alacritty 
-
-https://github.com/alacritty/alacritty/blob/master/LICENSE-APACHE
+The vendored terminal engine and configuration derive crates retain their
+upstream Apache-2.0 license in `LICENSE-APACHE`.

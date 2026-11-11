@@ -4,11 +4,11 @@ use std::iter;
 
 use glutin::event::ModifiersState;
 
-use alacritty_terminal::grid::{BidirectionalIterator, Dimensions};
-use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point};
-use alacritty_terminal::term::cell::Hyperlink;
-use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
-use alacritty_terminal::term::{Term, TermMode};
+use heroinn_shell_terminal::grid::{BidirectionalIterator, Dimensions};
+use heroinn_shell_terminal::index::{Boundary, Column, Direction, Line, Point};
+use heroinn_shell_terminal::term::cell::Hyperlink;
+use heroinn_shell_terminal::term::search::{Match, RegexIter, RegexSearch};
+use heroinn_shell_terminal::term::{Term, TermMode};
 
 use crate::config::ui_config::{Hint, HintAction};
 use crate::config::UiConfig;
@@ -584,9 +584,9 @@ impl<'a, T> Iterator for HintPostProcessor<'a, T> {
 
 #[cfg(test)]
 mod tests {
-    use alacritty_terminal::ansi::Handler;
-    use alacritty_terminal::index::{Column, Line};
-    use alacritty_terminal::term::test::mock_term;
+    use heroinn_shell_terminal::ansi::Handler;
+    use heroinn_shell_terminal::index::{Column, Line};
+    use heroinn_shell_terminal::term::test::mock_term;
 
     use super::*;
 

@@ -18,7 +18,7 @@ pub fn attach_handler() {
             winuser::MessageBoxW(
                 ptr::null_mut(),
                 win32_string(&msg).as_ptr(),
-                win32_string("Alacritty: Runtime Error").as_ptr(),
+                win32_string("Heroinn Shell: Runtime Error").as_ptr(),
                 winuser::MB_ICONERROR
                     | winuser::MB_OK
                     | winuser::MB_SETFOREGROUND

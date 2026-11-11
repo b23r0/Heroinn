@@ -72,7 +72,7 @@ impl HyperlinkInner {
             Some(id) => id.to_string(),
             None => {
                 let mut id = HYPERLINK_ID_SUFFIX.fetch_add(1, Ordering::Relaxed).to_string();
-                id.push_str("_alacritty");
+                id.push_str("_heroinn_shell");
                 id
             },
         };

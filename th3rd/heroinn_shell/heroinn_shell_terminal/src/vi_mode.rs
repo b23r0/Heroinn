@@ -1,6 +1,6 @@
 use std::cmp::min;
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
 use crate::event::EventListener;
 use crate::grid::{Dimensions, GridCell};

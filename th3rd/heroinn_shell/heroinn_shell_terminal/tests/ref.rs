@@ -5,14 +5,14 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::Path;
 
-use alacritty_terminal::ansi;
-use alacritty_terminal::config::Config;
-use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::{Dimensions, Grid};
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Cell;
-use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::Term;
+use heroinn_shell_terminal::ansi;
+use heroinn_shell_terminal::config::Config;
+use heroinn_shell_terminal::event::{Event, EventListener};
+use heroinn_shell_terminal::grid::{Dimensions, Grid};
+use heroinn_shell_terminal::index::{Column, Line};
+use heroinn_shell_terminal::term::cell::Cell;
+use heroinn_shell_terminal::term::test::TermSize;
+use heroinn_shell_terminal::term::Term;
 
 macro_rules! ref_tests {
     ($($name:ident)*) => {
@@ -95,7 +95,7 @@ impl EventListener for Mock {
 }
 
 fn ref_test(dir: &Path) {
-    let recording = read_u8(dir.join("alacritty.recording"));
+    let recording = read_u8(dir.join("heroinn_shell.recording"));
     let serialized_size = fs::read_to_string(dir.join("size.json")).unwrap();
     let serialized_grid = fs::read_to_string(dir.join("grid.json")).unwrap();
     let serialized_cfg = fs::read_to_string(dir.join("config.json")).unwrap();

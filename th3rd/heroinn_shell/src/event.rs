@@ -23,14 +23,14 @@ use wayland_client::{Display as WaylandDisplay, EventQueue};
 
 use crossfont::{self, Size};
 
-use alacritty_terminal::config::LOG_TARGET_CONFIG;
-use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
-use alacritty_terminal::event_loop::Notifier;
-use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
-use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::search::{Match, RegexSearch};
-use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
+use heroinn_shell_terminal::config::LOG_TARGET_CONFIG;
+use heroinn_shell_terminal::event::{Event as TerminalEvent, EventListener, Notify};
+use heroinn_shell_terminal::event_loop::Notifier;
+use heroinn_shell_terminal::grid::{Dimensions, Scroll};
+use heroinn_shell_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
+use heroinn_shell_terminal::selection::{Selection, SelectionType};
+use heroinn_shell_terminal::term::search::{Match, RegexSearch};
+use heroinn_shell_terminal::term::{self, ClipboardType, Term, TermMode};
 
 use crate::cli::WindowOptions;
 use crate::clipboard::Clipboard;
@@ -54,7 +54,7 @@ const MAX_SEARCH_WHILE_TYPING: Option<usize> = Some(1000);
 /// Maximum number of search terms stored in the history.
 const MAX_SEARCH_HISTORY_SIZE: usize = 255;
 
-/// Alacritty events.
+/// Heroinn Shell events.
 #[derive(Debug, Clone)]
 pub struct Event {
     /// Limit event to a specific window.
@@ -76,7 +76,7 @@ impl From<Event> for GlutinEvent<'_, Event> {
     }
 }
 
-/// Alacritty events.
+/// Heroinn Shell events.
 #[derive(Debug, Clone)]
 pub enum EventType {
     ScaleFactorChanged(f64, (u32, u32)),
@@ -356,11 +356,11 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn spawn_new_instance(&mut self) {
         let mut env_args = env::args();
-        let alacritty = env_args.next().unwrap();
+        let heroinn_shell = env_args.next().unwrap();
 
         let mut args: Vec<String> = Vec::new();
 
-        // Reuse the arguments passed to Alacritty for the new instance.
+        // Reuse the arguments passed to Heroinn Shell for the new instance.
         #[allow(clippy::while_let_on_iterator)]
         while let Some(arg) = env_args.next() {
             // New instances shouldn't inherit command.
@@ -378,7 +378,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             args.push(arg);
         }
 
-        self.spawn_daemon(&alacritty, &args);
+        self.spawn_daemon(&heroinn_shell, &args);
     }
 
     #[cfg(not(windows))]

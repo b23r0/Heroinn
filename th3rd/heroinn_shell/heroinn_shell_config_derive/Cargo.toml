@@ -1,10 +1,10 @@
 [package]
-name = "alacritty_config_derive"
+name = "heroinn_shell_config_derive"
 version = "0.1.0"
 authors = ["Christian Duerr <contact@christianduerr.com>"]
 license = "MIT/Apache-2.0"
 description = "Failure resistant deserialization derive"
-homepage = "https://github.com/alacritty/alacritty"
+homepage = "https://github.com/b23r0/Heroinn"
 edition = "2021"
 rust-version = "1.57.0"
 

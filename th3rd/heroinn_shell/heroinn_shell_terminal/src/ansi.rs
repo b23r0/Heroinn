@@ -9,7 +9,7 @@ use log::{debug, trace};
 use serde::{Deserialize, Serialize};
 use vte::{Params, ParamsIter};
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
 use crate::index::{Column, Line};
 use crate::term::cell::Hyperlink;

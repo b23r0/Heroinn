@@ -666,14 +666,14 @@ mod tests {
         #[rustfmt::skip]
         let term = mock_term("\
             testing66\r\n\
-            Alacritty\n\
+            Heroinn Shell\n\
             123\r\n\
-            Alacritty\r\n\
+            Heroinn Shell\r\n\
             123\
         ");
 
         // Check regex across wrapped and unwrapped lines.
-        let mut regex = RegexSearch::new("Ala.*123").unwrap();
+        let mut regex = RegexSearch::new("Her.*123").unwrap();
         let start = Point::new(Line(1), Column(0));
         let end = Point::new(Line(4), Column(2));
         let match_start = Point::new(Line(1), Column(0));
@@ -686,14 +686,14 @@ mod tests {
         #[rustfmt::skip]
         let term = mock_term("\
             testing66\r\n\
-            Alacritty\n\
+            Heroinn Shell\n\
             123\r\n\
-            Alacritty\r\n\
+            Heroinn Shell\r\n\
             123\
         ");
 
         // Check regex across wrapped and unwrapped lines.
-        let mut regex = RegexSearch::new("Ala.*123").unwrap();
+        let mut regex = RegexSearch::new("Her.*123").unwrap();
         let start = Point::new(Line(4), Column(2));
         let end = Point::new(Line(1), Column(0));
         let match_start = Point::new(Line(1), Column(0));
@@ -705,20 +705,20 @@ mod tests {
     fn nested_regex() {
         #[rustfmt::skip]
         let term = mock_term("\
-            Ala -> Alacritty -> critty\r\n\
+            Her -> Heroinn Shell -> critty\r\n\
             critty\
         ");
 
         // Greedy stopped at linebreak.
-        let mut regex = RegexSearch::new("Ala.*critty").unwrap();
+        let mut regex = RegexSearch::new("Her.*critty").unwrap();
         let start = Point::new(Line(0), Column(0));
-        let end = Point::new(Line(0), Column(25));
+        let end = Point::new(Line(0), Column(29));
         assert_eq!(term.regex_search_right(&mut regex, start, end), Some(start..=end));
 
         // Greedy stopped at dead state.
-        let mut regex = RegexSearch::new("Ala[^y]*critty").unwrap();
+        let mut regex = RegexSearch::new("Her[^y]*critty").unwrap();
         let start = Point::new(Line(0), Column(0));
-        let end = Point::new(Line(0), Column(15));
+        let end = Point::new(Line(0), Column(29));
         assert_eq!(term.regex_search_right(&mut regex, start, end), Some(start..=end));
     }
 
@@ -787,10 +787,10 @@ mod tests {
 
     #[test]
     fn skip_dead_cell() {
-        let term = mock_term("alacritty");
+        let term = mock_term("heroinn_shell");
 
         // Make sure dead state cell is skipped when reversing.
-        let mut regex = RegexSearch::new("alacrit").unwrap();
+        let mut regex = RegexSearch::new("heroinn").unwrap();
         let start = Point::new(Line(0), Column(0));
         let end = Point::new(Line(0), Column(6));
         assert_eq!(term.regex_search_right(&mut regex, start, end), Some(start..=end));

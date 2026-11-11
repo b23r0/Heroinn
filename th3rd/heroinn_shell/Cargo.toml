@@ -5,7 +5,7 @@ authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.
 license = "Apache-2.0"
 description = "Heroinn's server-side terminal window, driving the remote pty over a local socket"
 readme = "README.md"
-homepage = "https://github.com/b23r0/alacritty-driver"
+homepage = "https://github.com/b23r0/heroinn-shell-driver"
 edition = "2021"
 rust-version.workspace = true
 
@@ -13,13 +13,13 @@ rust-version.workspace = true
 name = "heroinn_shell"
 path = "src/main.rs"
 
-[dependencies.alacritty_terminal]
-path = "alacritty_terminal"
+[dependencies.heroinn_shell_terminal]
+path = "heroinn_shell_terminal"
 version = "0.17.0-dev"
 default-features = false
 
-[dependencies.alacritty_config_derive]
-path = "alacritty_config_derive"
+[dependencies.heroinn_shell_config_derive]
+path = "heroinn_shell_config_derive"
 version = "0.1.0"
 
 [dependencies]

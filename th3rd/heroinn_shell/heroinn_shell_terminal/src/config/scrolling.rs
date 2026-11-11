@@ -1,7 +1,7 @@
 use serde::de::Error as SerdeError;
 use serde::{Deserialize, Deserializer};
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
 /// Maximum scrollback amount configurable.
 pub const MAX_SCROLLBACK_LINES: u32 = 100_000;

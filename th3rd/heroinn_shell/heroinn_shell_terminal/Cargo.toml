@@ -1,16 +1,16 @@
 [package]
-name = "alacritty_terminal"
+name = "heroinn_shell_terminal"
 version = "0.17.0-dev"
 authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.com>"]
 license = "Apache-2.0"
 description = "Library for writing terminal emulators"
 readme = "../README.md"
-homepage = "https://github.com/alacritty/alacritty"
+homepage = "https://github.com/b23r0/Heroinn"
 edition = "2021"
 rust-version = "1.57.0"
 
-[dependencies.alacritty_config_derive]
-path = "../alacritty_config_derive"
+[dependencies.heroinn_shell_config_derive]
+path = "../heroinn_shell_config_derive"
 version = "0.1.0"
 
 [dependencies]

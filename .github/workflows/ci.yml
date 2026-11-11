@@ -107,13 +107,13 @@ jobs:
           -- -D warnings
 
       - name: Run first-party and supporting tests
-        run: cargo test --workspace --exclude alacritty_terminal --locked
+        run: cargo test --workspace --exclude heroinn_shell_terminal --locked
 
       - name: Run vendored terminal library tests
-        run: cargo test -p alacritty_terminal --lib --locked
+        run: cargo test -p heroinn_shell_terminal --lib --locked
 
       - name: Run configuration integration tests
-        run: cargo test -p alacritty_config_derive --test config --locked
+        run: cargo test -p heroinn_shell_config_derive --test config --locked
 
   release:
     name: Release build (${{ matrix.os }})

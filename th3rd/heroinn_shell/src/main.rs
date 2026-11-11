@@ -1,4 +1,4 @@
-//! Alacritty - The GPU Enhanced Terminal.
+//! Heroinn Shell - The GPU Enhanced Terminal.
 
 #![warn(rust_2018_idioms, future_incompatible)]
 #![deny(clippy::all, clippy::if_not_else, clippy::enum_glob_use)]
@@ -26,7 +26,7 @@ use log::info;
 #[cfg(windows)]
 use winapi::um::wincon::{AttachConsole, FreeConsole, ATTACH_PARENT_PROCESS};
 
-use alacritty_terminal::tty;
+use heroinn_shell_terminal::tty;
 
 mod cli;
 mod clipboard;
@@ -78,7 +78,7 @@ fn main() {
         },
     };
 
-    let result = alacritty(options);
+    let result = heroinn_shell(options);
 
     // Handle command failure.
     if let Err(err) = result {
@@ -87,7 +87,7 @@ fn main() {
     }
 }
 
-/// Temporary files stored for Alacritty.
+/// Temporary files stored for Heroinn Shell.
 ///
 /// This stores temporary files to automate their destruction through its `Drop` implementation.
 struct TemporaryFiles {
@@ -105,11 +105,11 @@ impl Drop for TemporaryFiles {
     }
 }
 
-/// Run main Alacritty entrypoint.
+/// Run main Heroinn Shell entrypoint.
 ///
 /// Creates a window, the terminal state, PTY, I/O event loop, input processor,
 /// config change monitor, and runs the main display loop.
-fn alacritty(options: Options) -> Result<(), String> {
+fn heroinn_shell(options: Options) -> Result<(), String> {
     // Setup glutin event loop.
     let window_event_loop = GlutinEventLoop::<Event>::with_user_event();
 
@@ -117,7 +117,7 @@ fn alacritty(options: Options) -> Result<(), String> {
     let log_file =
         logging::initialize(window_event_loop.create_proxy()).expect("Unable to initialize logger");
 
-    info!("Welcome to Alacritty");
+    info!("Welcome to Heroinn Shell");
 
     #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
     info!("Running on {}", if window_event_loop.is_x11() { "X11" } else { "Wayland" });
@@ -158,7 +158,7 @@ fn alacritty(options: Options) -> Result<(), String> {
     let window_options = WindowOptions::default();
     let mut processor = Processor::new(config, &window_event_loop);
 
-    // Create the first Alacritty window.
+    // Create the first Heroinn Shell window.
     let proxy = window_event_loop.create_proxy();
     processor
         .create_window(&window_event_loop, proxy, window_options)

@@ -17,14 +17,14 @@ use serde_json as json;
 #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use wayland_client::EventQueue;
 
-use alacritty_terminal::event::Event as TerminalEvent;
-use alacritty_terminal::event_loop::{EventLoop as PtyEventLoop, Msg, Notifier};
-use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::Direction;
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Term, TermMode};
-use alacritty_terminal::tty;
+use heroinn_shell_terminal::event::Event as TerminalEvent;
+use heroinn_shell_terminal::event_loop::{EventLoop as PtyEventLoop, Msg, Notifier};
+use heroinn_shell_terminal::grid::{Dimensions, Scroll};
+use heroinn_shell_terminal::index::Direction;
+use heroinn_shell_terminal::sync::FairMutex;
+use heroinn_shell_terminal::term::test::TermSize;
+use heroinn_shell_terminal::term::{Term, TermMode};
+use heroinn_shell_terminal::tty;
 
 use crate::cli::WindowOptions;
 use crate::clipboard::Clipboard;
@@ -35,7 +35,7 @@ use crate::input;
 use crate::message_bar::MessageBuffer;
 use crate::scheduler::Scheduler;
 
-/// Event context for one individual Alacritty window.
+/// Event context for one individual Heroinn Shell window.
 pub struct WindowContext {
     pub message_buffer: MessageBuffer,
     pub display: Display,
@@ -135,7 +135,7 @@ impl WindowContext {
             event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
         }
 
-        // Create context for the Alacritty window.
+        // Create context for the Heroinn Shell window.
         Ok(WindowContext {
             font_size: config.font.size(),
             notifier: Notifier(loop_tx),

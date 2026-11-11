@@ -6,14 +6,14 @@ use log::error;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use alacritty_config_derive::ConfigDeserialize;
-use alacritty_terminal::config::{Percentage, LOG_TARGET_CONFIG};
-use alacritty_terminal::index::Column;
+use heroinn_shell_config_derive::ConfigDeserialize;
+use heroinn_shell_terminal::config::{Percentage, LOG_TARGET_CONFIG};
+use heroinn_shell_terminal::index::Column;
 
 use crate::config::ui_config::Delta;
 
-/// Default Alacritty name, used for window title and class.
-pub const DEFAULT_NAME: &str = "Alacritty";
+/// Default Heroinn Shell name, used for window title and class.
+pub const DEFAULT_NAME: &str = "Heroinn Shell";
 
 #[derive(ConfigDeserialize, Debug, Clone, PartialEq)]
 pub struct WindowConfig {

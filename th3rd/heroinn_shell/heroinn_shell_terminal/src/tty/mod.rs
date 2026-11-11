@@ -56,10 +56,10 @@ pub trait EventedPty: EventedReadWrite {
 
 /// Setup environment variables.
 pub fn setup_env(config: &Config) {
-    // Default to 'alacritty' terminfo if it is available, otherwise
+    // Default to 'heroinn_shell' terminfo if it is available, otherwise
     // default to 'xterm-256color'. May be overridden by user's config
     // below.
-    let terminfo = if terminfo_exists("alacritty") { "alacritty" } else { "xterm-256color" };
+    let terminfo = if terminfo_exists("heroinn_shell") { "heroinn_shell" } else { "xterm-256color" };
     env::set_var("TERM", terminfo);
 
     // Advertise 24-bit color support.

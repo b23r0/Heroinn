@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
 mod scrolling;
 
@@ -12,7 +12,7 @@ use crate::ansi::{CursorShape, CursorStyle};
 
 pub use crate::config::scrolling::{Scrolling, MAX_SCROLLBACK_LINES};
 
-pub const LOG_TARGET_CONFIG: &str = "alacritty_config_derive";
+pub const LOG_TARGET_CONFIG: &str = "heroinn_shell_config_derive";
 
 const MIN_BLINK_INTERVAL: u64 = 10;
 

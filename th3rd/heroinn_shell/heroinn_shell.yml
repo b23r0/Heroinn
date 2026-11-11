@@ -1,4 +1,4 @@
-# Configuration for Alacritty, the GPU enhanced terminal emulator.
+# Configuration for Heroinn Shell, the GPU enhanced terminal emulator.
 
 # Import additional configuration files
 #
@@ -9,19 +9,19 @@
 # All imports must either be absolute paths starting with `/`, or paths relative
 # to the user's home directory starting with `~/`.
 #import:
-#  - /path/to/alacritty.yml
+#  - /path/to/heroinn_shell.yml
 
 # Any items in the `env` entry below will be added as
 # environment variables. Some entries may override variables
-# set by alacritty itself.
+# set by heroinn_shell itself.
 #env:
   # TERM variable
   #
   # This value is used to set the `$TERM` environment variable for
-  # each instance of Alacritty. If it is not present, alacritty will
-  # check the local terminfo database and use `alacritty` if it is
+  # each instance of Heroinn Shell. If it is not present, heroinn_shell will
+  # check the local terminfo database and use `heroinn_shell` if it is
   # available, otherwise `xterm-256color` is used.
-  #TERM: alacritty
+  #TERM: heroinn_shell
 
 #window:
   # Window dimensions (changes require restart)
@@ -81,17 +81,17 @@
   #startup_mode: Windowed
 
   # Window title
-  #title: Alacritty
+  #title: Heroinn Shell
 
-  # Allow terminal applications to change Alacritty's window title.
+  # Allow terminal applications to change Heroinn Shell's window title.
   #dynamic_title: true
 
   # Window class (Linux/BSD only):
   #class:
     # Application instance name
-    #instance: Alacritty
+    #instance: Heroinn Shell
     # General application class
-    #general: Alacritty
+    #general: Heroinn Shell
 
   # GTK theme variant (Linux/BSD only)
   #
@@ -174,7 +174,7 @@
 
   # Use built-in font for box drawing characters.
   #
-  # If `true`, Alacritty will use a custom built-in font for box drawing
+  # If `true`, Heroinn Shell will use a custom built-in font for box drawing
   # characters (Unicode points 2500 - 259f).
   #
   #builtin_box_drawing: true
@@ -374,7 +374,7 @@
 
 #selection:
   # This string contains all characters that are used as separators for
-  # "semantic words" in Alacritty.
+  # "semantic words" in Heroinn Shell.
   #semantic_escape_chars: ",│`|:\"' ()[]{}<>\t"
 
   # When set to `true`, selected text will be copied to the primary clipboard.
@@ -450,14 +450,14 @@
 # Send ESC (\x1b) before characters when alt is pressed.
 #alt_send_esc: true
 
-# Offer IPC using `alacritty msg` (unix only)
+# Offer IPC using `heroinn_shell msg` (unix only)
 #ipc_socket: true
 
 #mouse:
   # Click settings
   #
   # The `double_click` and `triple_click` settings control the time
-  # alacritty should wait for accepting multiple clicks as one double
+  # heroinn_shell should wait for accepting multiple clicks as one double
   # or triple click.
   #double_click: { threshold: 300 }
   #triple_click: { threshold: 300 }
@@ -520,7 +520,7 @@
 # Mouse bindings are specified as a list of objects, much like the key
 # bindings further below.
 #
-# To trigger mouse bindings when an application running within Alacritty
+# To trigger mouse bindings when an application running within Heroinn Shell
 # captures the mouse, the `Shift` modifier is automatically added as a
 # requirement.
 #
@@ -607,18 +607,18 @@
 #   - ClearHistory
 #       Remove the terminal's scrollback history.
 #   - Hide
-#       Hide the Alacritty window.
+#       Hide the Heroinn Shell window.
 #   - Minimize
-#       Minimize the Alacritty window.
+#       Minimize the Heroinn Shell window.
 #   - Quit
-#       Quit Alacritty.
+#       Quit Heroinn Shell.
 #   - ToggleFullscreen
 #   - SpawnNewInstance
-#       Spawn a new instance of Alacritty.
+#       Spawn a new instance of Heroinn Shell.
 #   - CreateNewWindow
-#       Create a new Alacritty window from the current process.
+#       Create a new Heroinn Shell window from the current process.
 #   - ClearLogNotice
-#       Clear Alacritty's UI warning and error notice.
+#       Clear Heroinn Shell's UI warning and error notice.
 #   - ClearSelection
 #       Remove the active selection.
 #   - ReceiveChar
@@ -718,7 +718,7 @@
 #
 #    The `command` field must be a map containing a `program` string and an
 #    `args` array of command line parameter strings. For example:
-#       `{ program: "alacritty", args: ["-e", "vttest"] }`
+#       `{ program: "heroinn_shell", args: ["-e", "vttest"] }`
 #
 # And optionally:
 #
@@ -872,7 +872,7 @@
   # Display the time it takes to redraw each frame.
   #render_timer: false
 
-  # Keep the log file after quitting Alacritty.
+  # Keep the log file after quitting Heroinn Shell.
   #persistent_logging: false
 
   # Log level

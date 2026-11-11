@@ -22,14 +22,14 @@ use glutin::event_loop::EventLoopWindowTarget;
 use glutin::platform::macos::EventLoopWindowTargetExtMacOS;
 use glutin::window::CursorIcon;
 
-use alacritty_terminal::ansi::{ClearMode, Handler};
-use alacritty_terminal::event::EventListener;
-use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Boundary, Column, Direction, Point, Side};
-use alacritty_terminal::selection::SelectionType;
-use alacritty_terminal::term::search::Match;
-use alacritty_terminal::term::{ClipboardType, Term, TermMode};
-use alacritty_terminal::vi_mode::ViMotion;
+use heroinn_shell_terminal::ansi::{ClearMode, Handler};
+use heroinn_shell_terminal::event::EventListener;
+use heroinn_shell_terminal::grid::{Dimensions, Scroll};
+use heroinn_shell_terminal::index::{Boundary, Column, Direction, Point, Side};
+use heroinn_shell_terminal::selection::SelectionType;
+use heroinn_shell_terminal::term::search::Match;
+use heroinn_shell_terminal::term::{ClipboardType, Term, TermMode};
+use heroinn_shell_terminal::vi_mode::ViMotion;
 
 use crate::clipboard::Clipboard;
 use crate::config::{Action, BindingMode, Key, MouseAction, SearchAction, UiConfig, ViAction};
@@ -986,7 +986,7 @@ mod tests {
     use glutin::event::{DeviceId, Event as GlutinEvent, VirtualKeyCode, WindowEvent};
     use glutin::window::WindowId;
 
-    use alacritty_terminal::event::Event as TerminalEvent;
+    use heroinn_shell_terminal::event::Event as TerminalEvent;
 
     use crate::config::Binding;
     use crate::message_bar::MessageBuffer;
@@ -1124,7 +1124,7 @@ mod tests {
         let cfg = UiConfig::default();
         let size = SizeInfo::new(800.0, 50.0, 10.0, 10.0, 0., 0., false);
         let mut terminal = Term::new(&cfg.terminal_config, &size, MockEventProxy);
-        let mut parser = alacritty_terminal::ansi::Processor::new();
+        let mut parser = heroinn_shell_terminal::ansi::Processor::new();
         for line in 0..200 {
             for byte in format!("HISTORY_LINE_{line:03}\r\n").bytes() {
                 parser.advance(&mut terminal, byte);

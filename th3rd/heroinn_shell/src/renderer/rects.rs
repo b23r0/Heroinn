@@ -3,10 +3,10 @@ use std::mem;
 
 use crossfont::Metrics;
 
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point};
-use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::color::Rgb;
+use heroinn_shell_terminal::grid::Dimensions;
+use heroinn_shell_terminal::index::{Column, Point};
+use heroinn_shell_terminal::term::cell::Flags;
+use heroinn_shell_terminal::term::color::Rgb;
 
 use crate::display::content::RenderableCell;
 use crate::display::SizeInfo;
@@ -474,7 +474,7 @@ impl RectShaderProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alacritty_terminal::index::Column;
+    use heroinn_shell_terminal::index::Column;
 
     fn metrics() -> Metrics {
         Metrics {

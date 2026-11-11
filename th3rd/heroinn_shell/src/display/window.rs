@@ -49,7 +49,7 @@ use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 #[cfg(windows)]
 use winapi::shared::minwindef::WORD;
 
-use alacritty_terminal::index::Point;
+use heroinn_shell_terminal::index::Point;
 
 use crate::config::window::{Decorations, Identity, WindowConfig};
 use crate::config::UiConfig;
@@ -58,7 +58,7 @@ use crate::gl;
 
 /// Window icon for `_NET_WM_ICON` property.
 #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
-static WINDOW_ICON: &[u8] = include_bytes!("../../alacritty.png");
+static WINDOW_ICON: &[u8] = include_bytes!("../../heroinn_shell.png");
 
 /// This should match the definition of IDI_ICON from `windows.rc`.
 #[cfg(windows)]
@@ -160,7 +160,7 @@ fn create_gl_window<E>(
 
 /// A window which can be used for displaying the terminal.
 ///
-/// Wraps the underlying windowing library to provide a stable API in Alacritty.
+/// Wraps the underlying windowing library to provide a stable API in Heroinn Shell.
 pub struct Window {
     /// Flag tracking frame redraw requests from Wayland compositor.
     #[cfg(not(any(target_os = "macos", windows)))]
@@ -247,7 +247,7 @@ impl Window {
 
         #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
         let wayland_surface = if is_wayland {
-            // Attach surface to Alacritty's internal wayland queue to handle frame callbacks.
+            // Attach surface to Heroinn Shell's internal wayland queue to handle frame callbacks.
             let surface = windowed_context.window().wayland_surface().unwrap();
             let proxy: Proxy<WlSurface> = unsafe { Proxy::from_c_ptr(surface as _) };
             Some(proxy.attach(wayland_event_queue.as_ref().unwrap().token()))
@@ -507,7 +507,7 @@ impl Window {
         // On X11 damage tracking is behaving in unexpected ways on some NVIDIA systems. Since
         // there's no compositor supporting it, damage tracking is disabled on X11.
         //
-        // For more see https://github.com/alacritty/alacritty/issues/6051.
+        // For more see https://github.com/b23r0/Heroinn/issues/6051.
         #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
         if self.window().xlib_window().is_some() {
             return false;

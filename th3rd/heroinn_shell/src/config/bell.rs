@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
-use alacritty_terminal::config::Program;
-use alacritty_terminal::term::color::Rgb;
+use heroinn_shell_terminal::config::Program;
+use heroinn_shell_terminal::term::color::Rgb;
 
 #[derive(ConfigDeserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BellConfig {

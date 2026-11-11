@@ -2,15 +2,15 @@ use std::borrow::Cow;
 use std::ops::Deref;
 use std::{cmp, mem};
 
-use alacritty_terminal::ansi::{Color, CursorShape, NamedColor};
-use alacritty_terminal::event::EventListener;
-use alacritty_terminal::grid::Indexed;
-use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::selection::SelectionRange;
-use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
-use alacritty_terminal::term::color::{CellRgb, Rgb};
-use alacritty_terminal::term::search::{Match, RegexSearch};
-use alacritty_terminal::term::{self, RenderableContent as TerminalContent, Term, TermMode};
+use heroinn_shell_terminal::ansi::{Color, CursorShape, NamedColor};
+use heroinn_shell_terminal::event::EventListener;
+use heroinn_shell_terminal::grid::Indexed;
+use heroinn_shell_terminal::index::{Column, Line, Point};
+use heroinn_shell_terminal::selection::SelectionRange;
+use heroinn_shell_terminal::term::cell::{Cell, Flags, Hyperlink};
+use heroinn_shell_terminal::term::color::{CellRgb, Rgb};
+use heroinn_shell_terminal::term::search::{Match, RegexSearch};
+use heroinn_shell_terminal::term::{self, RenderableContent as TerminalContent, Term, TermMode};
 
 use crate::config::UiConfig;
 use crate::display::color::{List, DIM_FACTOR};
@@ -506,8 +506,8 @@ impl<'a> Deref for HintMatches<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alacritty_terminal::index::Line;
-    use alacritty_terminal::term::color::CellRgb;
+    use heroinn_shell_terminal::index::Line;
+    use heroinn_shell_terminal::term::color::CellRgb;
 
     fn rgb(r: u8, g: u8, b: u8) -> Rgb {
         Rgb { r, g, b }
@@ -616,7 +616,7 @@ mod tests {
         );
 
         config.colors.transparent_background_colors = true;
-        config.window.opacity = alacritty_terminal::config::Percentage::new(0.7);
+        config.window.opacity = heroinn_shell_terminal::config::Percentage::new(0.7);
         assert_eq!(
             RenderableCell::compute_bg_alpha(&config, Color::Named(NamedColor::Foreground)),
             0.7

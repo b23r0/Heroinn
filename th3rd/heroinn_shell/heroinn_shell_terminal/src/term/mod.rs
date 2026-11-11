@@ -1959,7 +1959,7 @@ impl<T: EventListener> Handler for Term<T> {
 
 /// Terminal version for escape sequence reports.
 ///
-/// This returns the current terminal version as a unique number based on alacritty_terminal's
+/// This returns the current terminal version as a unique number based on heroinn_shell_terminal's
 /// semver version. The different versions are padded to ensure that a higher semver version will
 /// always report a higher version number.
 fn version_number(mut version: &str) -> usize {
@@ -2124,7 +2124,7 @@ pub mod test {
     /// # Examples
     ///
     /// ```rust
-    /// use alacritty_terminal::term::test::mock_term;
+    /// use heroinn_shell_terminal::term::test::mock_term;
     ///
     /// // Create a terminal with the following cells:
     /// //

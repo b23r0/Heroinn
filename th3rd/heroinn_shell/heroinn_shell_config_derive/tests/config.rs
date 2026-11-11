@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use log::{Level, Log, Metadata, Record};
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
 #[derive(ConfigDeserialize, Debug, PartialEq, Eq)]
 enum TestEnum {

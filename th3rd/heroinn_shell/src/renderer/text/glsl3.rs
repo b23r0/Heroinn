@@ -4,7 +4,7 @@ use std::ptr;
 use crossfont::RasterizedGlyph;
 use log::info;
 
-use alacritty_terminal::term::cell::Flags;
+use heroinn_shell_terminal::term::cell::Flags;
 
 use crate::display::content::RenderableCell;
 use crate::display::SizeInfo;

@@ -3,8 +3,8 @@ Scripts
 
 ## Flamegraph
 
-Run the release version of Alacritty while recording call stacks. After the
-Alacritty process exits, a flamegraph will be generated and it's URI printed
+Run the release version of Heroinn Shell while recording call stacks. After the
+Heroinn Shell process exits, a flamegraph will be generated and it's URI printed
 as the only output to STDOUT.
 
 ```sh

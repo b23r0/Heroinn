@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use alacritty_terminal::config::{Program, PtyConfig};
+use heroinn_shell_terminal::config::{Program, PtyConfig};
 
 use crate::config::window::{Class, Identity};
 

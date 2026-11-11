@@ -6,7 +6,7 @@ use glutin::event_loop::EventLoopProxy;
 use log::{debug, error};
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
-use alacritty_terminal::thread;
+use heroinn_shell_terminal::thread;
 
 use crate::event::{Event, EventType};
 

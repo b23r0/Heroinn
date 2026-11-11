@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
 #[derive(ConfigDeserialize, Default, Clone, Debug, PartialEq, Eq)]
 pub struct Mouse {

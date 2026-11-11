@@ -1,9 +1,9 @@
 #define IDI_ICON 0x101
 
-IDI_ICON ICON "alacritty.ico"
+IDI_ICON ICON "heroinn_shell.ico"
 
 #define RT_MANIFEST 24
 #define APP_MANIFEST 1
 
-APP_MANIFEST RT_MANIFEST alacritty.manifest
+APP_MANIFEST RT_MANIFEST heroinn_shell.manifest
 

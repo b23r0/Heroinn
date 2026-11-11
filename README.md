@@ -124,6 +124,8 @@ and the generator rejects templates containing more than one valid stamp.
 | `th3rd/heroinn_ftp` | File manager |
 | `th3rd/heroinn_socks5proxy` | Reverse SOCKS5 proxy GUI and sidecar |
 | `th3rd/heroinn_shell` | Terminal implementation used by `heroinn_shell` |
+| `th3rd/heroinn_shell/heroinn_shell_terminal` | Vendored terminal engine |
+| `th3rd/heroinn_shell/heroinn_shell_config_derive` | Terminal configuration derive macro |
 | `th3rd/heroinn_conpty` | Vendored Windows ConPTY support |
 
 First-party crates use edition 2024 and share dependency versions pinned at the
@@ -145,9 +147,9 @@ cargo fmt -p heroinn_ftp -- --check
 cargo metadata --format-version 1 --locked --no-deps
 cargo check --workspace --lib --bins --locked
 cargo clippy -p heroinn -p heroinn_client -p heroinn_core -p heroinn_util -p heroinn_ftp -p heroinn_socks5proxy --all-targets --locked -- -D warnings
-cargo test --workspace --exclude alacritty_terminal --locked
-cargo test -p alacritty_terminal --lib --locked
-cargo test -p alacritty_config_derive --test config --locked
+cargo test --workspace --exclude heroinn_shell_terminal --locked
+cargo test -p heroinn_shell_terminal --lib --locked
+cargo test -p heroinn_shell_config_derive --test config --locked
 cargo build --workspace --release --locked
 HEROINN_CLIENT_TEMPLATE=target/release/heroinn_client \
   cargo test -p heroinn_util --test real_client_template --locked -- --ignored --exact patches_a_real_client_template

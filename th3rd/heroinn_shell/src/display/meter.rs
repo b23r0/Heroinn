@@ -6,7 +6,7 @@
 //!
 //! ```rust
 //! // create a meter
-//! let mut meter = alacritty_terminal::meter::Meter::new();
+//! let mut meter = heroinn_shell_terminal::meter::Meter::new();
 //!
 //! // Sample something.
 //! {

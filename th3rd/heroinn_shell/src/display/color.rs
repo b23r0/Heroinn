@@ -2,8 +2,8 @@ use std::ops::{Index, IndexMut};
 
 use log::trace;
 
-use alacritty_terminal::ansi::NamedColor;
-use alacritty_terminal::term::color::{Rgb, COUNT};
+use heroinn_shell_terminal::ansi::NamedColor;
+use heroinn_shell_terminal::term::color::{Rgb, COUNT};
 
 use crate::config::color::Colors;
 

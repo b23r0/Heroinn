@@ -3,11 +3,11 @@ use std::iter::Peekable;
 
 use glutin::Rect;
 
-use alacritty_terminal::term::{LineDamageBounds, TermDamageIterator};
+use heroinn_shell_terminal::term::{LineDamageBounds, TermDamageIterator};
 
 use crate::display::SizeInfo;
 
-/// Iterator which converts `alacritty_terminal` damage information into renderer damaged rects.
+/// Iterator which converts `heroinn_shell_terminal` damage information into renderer damaged rects.
 pub struct RenderDamageIterator<'a> {
     damaged_lines: Peekable<TermDamageIterator<'a>>,
     size_info: SizeInfo<u32>,

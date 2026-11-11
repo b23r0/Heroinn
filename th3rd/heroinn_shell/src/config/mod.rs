@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_yaml::mapping::Mapping;
 use serde_yaml::Value;
 
-use alacritty_terminal::config::LOG_TARGET_CONFIG;
+use heroinn_shell_terminal::config::LOG_TARGET_CONFIG;
 
 pub mod bell;
 pub mod color;
@@ -244,30 +244,30 @@ fn load_imports(config: &Value, config_paths: &mut Vec<PathBuf>, recursion_limit
 /// Get the location of the first found default config file paths
 /// according to the following order:
 ///
-/// 1. $XDG_CONFIG_HOME/alacritty/alacritty.yml
-/// 2. $XDG_CONFIG_HOME/alacritty.yml
-/// 3. $HOME/.config/alacritty/alacritty.yml
-/// 4. $HOME/.alacritty.yml
+/// 1. $XDG_CONFIG_HOME/heroinn_shell/heroinn_shell.yml
+/// 2. $XDG_CONFIG_HOME/heroinn_shell.yml
+/// 3. $HOME/.config/heroinn_shell/heroinn_shell.yml
+/// 4. $HOME/.heroinn_shell.yml
 #[cfg(not(windows))]
 fn installed_config() -> Option<PathBuf> {
     // Try using XDG location by default.
-    xdg::BaseDirectories::with_prefix("alacritty")
+    xdg::BaseDirectories::with_prefix("heroinn_shell")
         .ok()
-        .and_then(|xdg| xdg.find_config_file("alacritty.yml"))
+        .and_then(|xdg| xdg.find_config_file("heroinn_shell.yml"))
         .or_else(|| {
             xdg::BaseDirectories::new()
                 .ok()
-                .and_then(|fallback| fallback.find_config_file("alacritty.yml"))
+                .and_then(|fallback| fallback.find_config_file("heroinn_shell.yml"))
         })
         .or_else(|| {
             if let Ok(home) = env::var("HOME") {
-                // Fallback path: $HOME/.config/alacritty/alacritty.yml.
-                let fallback = PathBuf::from(&home).join(".config/alacritty/alacritty.yml");
+                // Fallback path: $HOME/.config/heroinn_shell/heroinn_shell.yml.
+                let fallback = PathBuf::from(&home).join(".config/heroinn_shell/heroinn_shell.yml");
                 if fallback.exists() {
                     return Some(fallback);
                 }
-                // Fallback path: $HOME/.alacritty.yml.
-                let fallback = PathBuf::from(&home).join(".alacritty.yml");
+                // Fallback path: $HOME/.heroinn_shell.yml.
+                let fallback = PathBuf::from(&home).join(".heroinn_shell.yml");
                 if fallback.exists() {
                     return Some(fallback);
                 }
@@ -278,18 +278,21 @@ fn installed_config() -> Option<PathBuf> {
 
 #[cfg(windows)]
 fn installed_config() -> Option<PathBuf> {
-    dirs::config_dir().map(|path| path.join("alacritty\\alacritty.yml")).filter(|new| new.exists())
+    dirs::config_dir()
+        .map(|path| path.join("heroinn_shell\\heroinn_shell.yml"))
+        .filter(|new| new.exists())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    static DEFAULT_ALACRITTY_CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/alacritty.yml");
+    static DEFAULT_HEROINN_SHELL_CONFIG: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/heroinn_shell.yml");
 
     #[test]
     fn config_read_eof() {
-        let config_path: PathBuf = DEFAULT_ALACRITTY_CONFIG.into();
+        let config_path: PathBuf = DEFAULT_HEROINN_SHELL_CONFIG.into();
         let mut config = read_config(&config_path).unwrap();
         config.config_paths = Vec::new();
         assert_eq!(config, UiConfig::default());

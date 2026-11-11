@@ -9,11 +9,11 @@ use serde::de::{Error as SerdeError, MapAccess, Visitor};
 use serde::{self, Deserialize, Deserializer};
 use unicode_width::UnicodeWidthChar;
 
-use alacritty_config_derive::ConfigDeserialize;
-use alacritty_terminal::config::{
+use heroinn_shell_config_derive::ConfigDeserialize;
+use heroinn_shell_terminal::config::{
     Config as TerminalConfig, Percentage, Program, LOG_TARGET_CONFIG,
 };
-use alacritty_terminal::term::search::RegexSearch;
+use heroinn_shell_terminal::term::search::RegexSearch;
 
 use crate::config::bell::BellConfig;
 use crate::config::bindings::{
@@ -65,7 +65,7 @@ pub struct UiConfig {
     /// Regex hints for interacting with terminal content.
     pub hints: Hints,
 
-    /// Config for the alacritty_terminal itself.
+    /// Config for the heroinn_shell_terminal itself.
     #[config(flatten)]
     pub terminal_config: TerminalConfig,
 
@@ -521,8 +521,8 @@ impl Eq for LazyRegexVariant {}
 mod tests {
     use super::*;
     use crate::config::window::Dimensions;
-    use alacritty_terminal::index::Column;
     use crossfont::Size as FontSize;
+    use heroinn_shell_terminal::index::Column;
 
     #[test]
     fn ui_config_deserializes_overrides_and_deprecated_opacity() {

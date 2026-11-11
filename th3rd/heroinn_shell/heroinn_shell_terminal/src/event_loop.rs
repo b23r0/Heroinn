@@ -32,7 +32,7 @@ pub enum Msg {
     /// Data that should be written to the PTY.
     Input(Cow<'static, [u8]>),
 
-    /// Indicates that the `EventLoop` should shut down, as Alacritty is shutting down.
+    /// Indicates that the `EventLoop` should shut down, as Heroinn Shell is shutting down.
     Shutdown,
 
     /// Instruction to resize the PTY.
@@ -332,7 +332,10 @@ where
             let mut events = Events::with_capacity(1024);
 
             let mut pipe = if self.ref_test {
-                Some(File::create("./alacritty.recording").expect("create alacritty recording"))
+                Some(
+                    File::create("./heroinn_shell.recording")
+                        .expect("create heroinn_shell recording"),
+                )
             } else {
                 None
             };

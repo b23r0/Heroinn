@@ -1,7 +1,7 @@
 //! Convert a cursor into an iterator of rects.
 
-use alacritty_terminal::ansi::CursorShape;
-use alacritty_terminal::term::color::Rgb;
+use heroinn_shell_terminal::ansi::CursorShape;
+use heroinn_shell_terminal::term::color::Rgb;
 
 use crate::display::content::RenderableCursor;
 use crate::display::SizeInfo;

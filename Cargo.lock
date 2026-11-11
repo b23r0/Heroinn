@@ -160,7 +160,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "alacritty_config_derive"
+name = "heroinn_shell_config_derive"
 version = "0.1.0"
 dependencies = [
  "log 0.4.35",
@@ -172,10 +172,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "alacritty_terminal"
+name = "heroinn_shell_terminal"
 version = "0.17.0-dev"
 dependencies = [
- "alacritty_config_derive",
+ "heroinn_shell_config_derive",
  "base64 0.22.1",
  "bitflags 2.13.2",
  "dirs",
@@ -2372,8 +2372,8 @@ dependencies = [
 name = "heroinn_shell"
 version = "0.1.0"
 dependencies = [
- "alacritty_config_derive",
- "alacritty_terminal",
+ "heroinn_shell_config_derive",
+ "heroinn_shell_terminal",
  "bitflags 2.13.2",
  "cocoa",
  "copypasta",

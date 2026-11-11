@@ -21,15 +21,17 @@ use wayland_client::EventQueue;
 
 use crossfont::{self, Rasterize, Rasterizer};
 
-use alacritty_terminal::ansi::NamedColor;
-use alacritty_terminal::config::MAX_SCROLLBACK_LINES;
-use alacritty_terminal::event::{EventListener, OnResize, WindowSize};
-use alacritty_terminal::grid::Dimensions as TermDimensions;
-use alacritty_terminal::index::{Column, Direction, Line, Point};
-use alacritty_terminal::selection::{Selection, SelectionRange};
-use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::color::Rgb;
-use alacritty_terminal::term::{self, Term, TermDamage, TermMode, MIN_COLUMNS, MIN_SCREEN_LINES};
+use heroinn_shell_terminal::ansi::NamedColor;
+use heroinn_shell_terminal::config::MAX_SCROLLBACK_LINES;
+use heroinn_shell_terminal::event::{EventListener, OnResize, WindowSize};
+use heroinn_shell_terminal::grid::Dimensions as TermDimensions;
+use heroinn_shell_terminal::index::{Column, Direction, Line, Point};
+use heroinn_shell_terminal::selection::{Selection, SelectionRange};
+use heroinn_shell_terminal::term::cell::Flags;
+use heroinn_shell_terminal::term::color::Rgb;
+use heroinn_shell_terminal::term::{
+    self, Term, TermDamage, TermMode, MIN_COLUMNS, MIN_SCREEN_LINES,
+};
 
 use crate::config::font::Font;
 #[cfg(not(windows))]
@@ -427,7 +429,7 @@ impl Display {
         debug!("Estimated window size: {:?}", estimated_size);
         debug!("Estimated cell size: {} x {}", cell_width, cell_height);
 
-        // Spawn the Alacritty window.
+        // Spawn the Heroinn Shell window.
         let window = Window::new(
             event_loop,
             config,
@@ -945,7 +947,7 @@ impl Display {
         #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
         if self.is_x11 {
             // On X11 `swap_buffers` does not block for vsync. However the next OpenGl command
-            // will block to synchronize (this is `glClear` in Alacritty), which causes a
+            // will block to synchronize (this is `glClear` in Heroinn Shell), which causes a
             // permanent one frame delay.
             self.renderer.finish();
         }

@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 use crossfont::{GlyphKey, RasterizedGlyph};
 
-use alacritty_terminal::term::cell::Flags;
+use heroinn_shell_terminal::term::cell::Flags;
 
 use crate::display::content::RenderableCell;
 use crate::display::SizeInfo;

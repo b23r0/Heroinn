@@ -1,4 +1,4 @@
-//! Logging for Alacritty.
+//! Logging for Heroinn Shell.
 //!
 //! The main executable is supposed to call `initialize()` exactly once during
 //! startup. All logging messages are written to stdout, given that their
@@ -19,10 +19,10 @@ use crate::event::{Event, EventType};
 use crate::message_bar::{Message, MessageType};
 
 /// Name for the environment variable containing the log file's path.
-const ALACRITTY_LOG_ENV: &str = "ALACRITTY_LOG";
-/// List of targets which will be logged by Alacritty.
+const HEROINN_SHELL_LOG_ENV: &str = "HEROINN_SHELL_LOG";
+/// List of targets which will be logged by Heroinn Shell.
 const ALLOWED_TARGETS: [&str; 4] =
-    ["alacritty_terminal", "alacritty_config_derive", "alacritty", "crossfont"];
+    ["heroinn_shell_terminal", "heroinn_shell_config_derive", "heroinn_shell", "crossfont"];
 
 pub fn initialize(
     event_proxy: EventLoopProxy<Event>,
@@ -73,9 +73,9 @@ impl Logger {
         };
 
         #[cfg(not(windows))]
-        let env_var = format!("${}", ALACRITTY_LOG_ENV);
+        let env_var = format!("${}", HEROINN_SHELL_LOG_ENV);
         #[cfg(windows)]
-        let env_var = format!("%{}%", ALACRITTY_LOG_ENV);
+        let env_var = format!("%{}%", HEROINN_SHELL_LOG_ENV);
 
         let message = format!(
             "[{}] See log at {} ({}):\n{}",
@@ -166,10 +166,10 @@ struct OnDemandLogFile {
 impl OnDemandLogFile {
     fn new() -> Self {
         let mut path = env::temp_dir();
-        path.push(format!("Alacritty-{}.log", process::id()));
+        path.push(format!("Heroinn-Shell-{}.log", process::id()));
 
         // Set log path as an environment variable.
-        env::set_var(ALACRITTY_LOG_ENV, path.as_os_str());
+        env::set_var(HEROINN_SHELL_LOG_ENV, path.as_os_str());
 
         OnDemandLogFile { path, file: None, created: Arc::new(AtomicBool::new(false)) }
     }

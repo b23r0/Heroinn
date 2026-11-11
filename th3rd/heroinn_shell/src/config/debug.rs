@@ -1,6 +1,6 @@
 use log::LevelFilter;
 
-use alacritty_config_derive::ConfigDeserialize;
+use heroinn_shell_config_derive::ConfigDeserialize;
 
 /// Debugging options.
 #[derive(ConfigDeserialize, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -15,7 +15,7 @@ pub struct Debug {
     /// Should show render timer.
     pub render_timer: bool,
 
-    /// Highlight damage information produced by alacritty.
+    /// Highlight damage information produced by heroinn_shell.
     pub highlight_damage: bool,
 
     /// Record ref test.
