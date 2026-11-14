@@ -21,6 +21,12 @@ tokio.workspace = true
 thiserror.workspace = true
 url.workspace = true
 native-tls.workspace = true
+snow.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg.workspace = true
+windows-sys.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

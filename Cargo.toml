@@ -47,6 +47,14 @@ tungstenite = "0.30"
 rust-raknet = "1.0"
 url = "2.5"
 native-tls = "0.2"
+snow = { version = "=0.10.0", default-features = false, features = [
+    "default-resolver",
+    "use-chacha20poly1305",
+    "use-blake2",
+    "use-curve25519",
+    "use-getrandom",
+] }
+zeroize = "1.9"
 
 # Filesystem / system information
 sysinfo = "0.39"
@@ -72,6 +80,7 @@ profiling = { version = "1.0", features = ["procmacros"] }
 # Platform
 libc = "0.2"
 nix = "0.31"
+windows-sys = { version = "0.61", features = ["Win32_Networking_WinSock"] }
 
 # Windows-only (kept at legacy versions for now)
 windows = "0.39"

@@ -16,6 +16,13 @@ use tokio::task::JoinHandle;
 
 use crate::error::{Error, Result};
 
+/// RakNet retransmits handshake packets on its own schedule. At the 5% loss
+/// and 64-peer concurrency covered by the native UDP tests a retransmit can
+/// land beyond ten seconds, so a healthy peer would be reported as a connect
+/// timeout. The handshake itself is unchanged; this only bounds how long a
+/// genuinely unreachable peer may take to fail.
+const RAKNET_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn map_error(error: RaknetError) -> Error {
     Error::Other(format!("{:?}", error))
 }
@@ -122,7 +129,7 @@ pub struct RUdpClient {
 }
 
 impl RUdpClient {
-    /// Connect to `address`, giving up after three seconds.
+    /// Connect to `address`, giving up after ten seconds.
     pub fn new(address: String) -> Result<Self> {
         let address: SocketAddr = address
             .parse()
@@ -131,7 +138,7 @@ impl RUdpClient {
         let runtime = CLIENT_RUNTIME.clone();
         let client = runtime
             .block_on(async {
-                tokio::time::timeout(Duration::from_secs(3), RaknetSocket::connect(&address)).await
+                tokio::time::timeout(RAKNET_CONNECT_TIMEOUT, RaknetSocket::connect(&address)).await
             })
             .map_err(|_| Error::Timeout)?
             .map_err(map_error)?;
@@ -157,6 +164,20 @@ impl RUdpClient {
         incoming
             .blocking_recv()
             .unwrap_or_else(|| Err(Error::Other("raknet receive actor stopped".to_string())))
+    }
+
+    pub fn recv_timeout(&self, timeout: Duration) -> Result<Vec<u8>> {
+        let mut incoming = self
+            .incoming
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match CLIENT_RUNTIME
+            .block_on(async { tokio::time::timeout(timeout, incoming.recv()).await })
+        {
+            Ok(Some(result)) => result,
+            Ok(None) => Err(Error::Other("raknet receive actor stopped".to_string())),
+            Err(_) => Err(Error::Timeout),
+        }
     }
 
     pub fn peer_addr(&self) -> Result<SocketAddr> {

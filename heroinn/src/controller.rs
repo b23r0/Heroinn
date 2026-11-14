@@ -501,7 +501,7 @@ fn open_socks5_inner(clientid: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{TcpListener, TcpStream};
+    use std::net::TcpListener;
     use std::sync::MutexGuard;
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -802,25 +802,18 @@ mod tests {
         remove_host(clientid.to_string());
         let host = host_info(clientid);
         let bytes = Message::build(HeroinnClientMsgID::HostInfo.to_u8(), clientid, host).unwrap();
-        let mut client = TcpStream::connect(addr).unwrap();
-        client
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        heroinn_util::protocol::frame::write_frame(&mut client, &bytes).unwrap();
+        let mut client =
+            heroinn_util::protocol::tcp::TcpConnection::connect(&addr.to_string()).unwrap();
+        client.send(&bytes).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while get_hostinfo_by_clientid(clientid).is_none() && std::time::Instant::now() < deadline {
             std::thread::yield_now();
         }
         assert!(get_hostinfo_by_clientid(clientid).is_some());
         send_data_by_clientid(clientid, b"payload").unwrap();
-        use std::io::Read;
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         let payload = loop {
-            let mut response = [0u8; 4];
-            client.read_exact(&mut response).unwrap();
-            let size = u32::from_be_bytes(response) as usize;
-            let mut payload = vec![0u8; size];
-            client.read_exact(&mut payload).unwrap();
+            let payload = client.recv().unwrap();
             if payload == b"payload" {
                 break payload;
             }

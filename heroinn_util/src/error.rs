@@ -49,6 +49,12 @@ pub enum Error {
     /// Proxy discovery or handshake failed.
     #[error("proxy error: {0}")]
     Proxy(#[from] crate::protocol::proxy::ProxyError),
+
+    /// End-to-end transport encryption failed closed.
+    ///
+    /// The static stage name is deliberately credential- and payload-free.
+    #[error("noise protocol error: {0}")]
+    Noise(&'static str),
 }
 
 /// Convenience alias used throughout the workspace.

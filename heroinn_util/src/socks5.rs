@@ -33,6 +33,15 @@ pub const SOCKS5_TARGET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const SOCKS5_TUNNEL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const SOCKS5_MAX_TUNNEL_CHUNK: usize = 64 * 1024;
 pub const SOCKS5_TUNNEL_MAGIC: [u8; 8] = *b"HRNSOCKS";
+/// Maximum application bytes read for one SOCKS5 data frame.
+///
+/// Reads use the full frame limit even though a 64 KiB frame is carried by
+/// two Noise records (60 KiB plus the remainder). Splitting the read into
+/// two sub-record frames would double the number of aggregate
+/// rate-limiter charges per 64 KiB, which measurably halves throughput on
+/// Windows where short waits are timer-bound.
+pub const SOCKS5_TUNNEL_PUMP_CHUNK: usize = SOCKS5_MAX_TUNNEL_CHUNK;
+const _: () = assert!(SOCKS5_TUNNEL_PUMP_CHUNK <= SOCKS5_MAX_TUNNEL_CHUNK);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Socks5Address {

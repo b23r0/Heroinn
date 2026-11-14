@@ -11,6 +11,7 @@
 
 pub mod frame;
 pub mod http;
+pub mod noise;
 pub mod outbound;
 pub mod proxy;
 pub mod tcp;

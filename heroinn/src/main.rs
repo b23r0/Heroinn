@@ -919,10 +919,9 @@ impl HeroinnApp {
                             let row_height = HOST_ROW_HEIGHT;
                             body.row(row_height, |mut row| {
                                 row.col(|ui| {
-                                    host_view::draw_host_platform_icon(ui, &info.info);
-                                })
-                                .1
-                                .context_menu(menu);
+                                    host_view::draw_host_platform_icon_cell(ui, &info.info)
+                                        .context_menu(menu);
+                                });
 
                                 row.col(|ui| {
                                     ui.label(sanitize_ui_text(&format!("{}", info.peer_addr)));

@@ -34,6 +34,7 @@ Heroinn 是一个使用 Rust 编写的跨平台命令控制与后渗透框架，
 - 设置每个 Agent 的总传输速率限制，默认 1 MB/s。
 - 支持Socks5 Reverse Proxy（通过代理链）
 - 支持 TCP、HTTP 和可靠 UDP 传输。
+- 传输使用端到端加密（Noise_NN_25519_ChaChaPoly_BLAKE2s）
 - 支持 Windows 10+（Windows Server 2019+）、Linux、BSD 和 macOS。
 - 使用 TCP 或 HTTP 通信时，Agent 会自动读取环境变量或当前桌面/用户系统代理，
   并可通过 HTTP CONNECT、HTTPS（显式 `https://` 代理 URL 时以 TLS 连接代理）或

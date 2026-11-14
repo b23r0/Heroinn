@@ -3,6 +3,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
         mpsc::{Sender, TryRecvError, channel},
     },
 };
@@ -11,16 +12,18 @@ use eframe::{App, egui};
 use egui_extras::{Column, Size, StripBuilder};
 use heroinn_util::{
     ftp::{
-        FTPId, FTPPacket, FileInfo,
+        FTPPacket, FileInfo,
         method::{join_path, transfer_size, transfer_speed},
     },
     protocol::tcp::TcpConnection,
-    rpc::{RpcClient, RpcMessage},
+    rpc::RpcClient,
 };
 use std::sync::LazyLock;
 
+mod connection;
 mod controller;
 mod msgbox;
+use connection::FtpWorkers;
 use controller::*;
 
 static G_RPCCLIENT: LazyLock<Arc<RpcClient>> = LazyLock::new(|| Arc::new(RpcClient::new()));
@@ -76,6 +79,16 @@ fn load_icon(ctx: &egui::Context, name: &str, bytes: &[u8]) -> egui::TextureHand
     ctx.load_texture(name, color, egui::TextureOptions::LINEAR)
 }
 
+fn file_row_icon(ui: &mut egui::Ui, texture: &egui::TextureHandle) -> egui::Response {
+    ui.add(
+        egui::Image::from_texture(egui::load::SizedTexture::new(
+            texture.id(),
+            egui::Vec2::new(20.0, 20.0),
+        ))
+        .sense(egui::Sense::click()),
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct TransferInfo {
     pub typ: String,
@@ -88,6 +101,7 @@ pub struct TransferInfo {
 }
 
 struct FtpApp {
+    stopped: Arc<AtomicBool>,
     initilized: bool,
     title: String,
     switch: SwitchDock,
@@ -110,7 +124,7 @@ struct FtpApp {
 impl FtpApp {
     const ROOT_FLAG: &'static str = "[DISK]";
 
-    pub fn new(sender: Sender<FTPPacket>) -> Self {
+    pub fn new(sender: Sender<FTPPacket>, stopped: Arc<AtomicBool>) -> Self {
         let (local_disk_info, local_error) = match get_local_disk_info() {
             Ok(entries) => (entries, None),
             Err(error) => (
@@ -137,6 +151,7 @@ impl FtpApp {
         };
 
         Self {
+            stopped,
             initilized: false,
             switch: SwitchDock::List,
             local_path: String::from(FtpApp::ROOT_FLAG),
@@ -203,6 +218,9 @@ impl FtpApp {
 impl App for FtpApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if close_disconnected_viewport(&ctx, &self.stopped) {
+            return;
+        }
         self.poll_remote_load();
 
         if !self.initilized {
@@ -291,6 +309,15 @@ impl App for FtpApp {
         });
 
         ctx.request_repaint();
+    }
+}
+
+fn close_disconnected_viewport(ctx: &egui::Context, stopped: &AtomicBool) -> bool {
+    if stopped.load(Ordering::Acquire) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        true
+    } else {
+        false
     }
 }
 
@@ -715,12 +742,9 @@ impl FtpApp {
                                     &file_image
                                 };
                                 if let Some(tex) = icon {
-                                    ui.add(egui::Image::from_texture(
-                                        egui::load::SizedTexture::new(
-                                            tex.id(),
-                                            egui::Vec2::new(20.0, 20.0),
-                                        ),
-                                    ));
+                                    file_row_icon(ui, tex).context_menu(|ui| {
+                                        menu(ui);
+                                    });
                                 }
                             })
                             .1
@@ -936,73 +960,65 @@ fn main() {
         return;
     }
 
-    let mut s = TcpConnection::connect_direct(&format!("127.0.0.1:{}", args[1])).unwrap();
-    let mut s2 = s.clone();
+    let connection = TcpConnection::connect_local_plain(&format!("127.0.0.1:{}", args[1])).unwrap();
+    let (mut workers, sender) = FtpWorkers::start(connection).unwrap();
+    let stopped = workers.stopped();
 
     let title = args[2].clone();
-
-    std::thread::Builder::new()
-        .name("ftp receiver worker".to_string())
-        .spawn(move || {
-            loop {
-                let data = match s.recv() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        std::process::exit(0);
-                    }
-                };
-                let packet = FTPPacket::parse(&data).unwrap();
-
-                match packet.id() {
-                    Ok(FTPId::RPC) => {
-                        let msg = RpcMessage::parse(&packet.data).unwrap();
-                        log::debug!("ftp recv msg from core : {}", msg.id);
-                        G_RPCCLIENT.write(&msg);
-                    }
-                    Ok(FTPId::Close) => {
-                        std::process::exit(0);
-                    }
-                    Ok(FTPId::Get | FTPId::Put) => {}
-                    Err(e) => log::warn!("unknown ftp packet id : {}", e),
-                }
-            }
-        })
-        .unwrap();
-
-    let (sender, receiver) = channel::<FTPPacket>();
-
-    std::thread::Builder::new()
-        .name("ftp sender worker".to_string())
-        .spawn(move || {
-            loop {
-                let msg = match receiver.recv() {
-                    Ok(p) => p,
-                    Err(_) => {
-                        std::process::exit(0);
-                    }
-                };
-                log::debug!("ftp send msg to core : {}", msg.id);
-                s2.send(&msg.serialize().unwrap()).unwrap();
-            }
-        })
-        .unwrap();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1070.0, 500.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         &format!("Heroinn FTP - {}", title),
         options,
-        Box::new(|_cc| Ok(Box::new(FtpApp::new(sender)))),
-    )
-    .unwrap();
+        Box::new(|_cc| Ok(Box::new(FtpApp::new(sender, stopped)))),
+    );
+    workers.shutdown();
+    result.unwrap();
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FtpApp, RemoteRefreshKind, can_enter, remote_refresh_kind};
+    use super::{FtpApp, RemoteRefreshKind, can_enter, file_row_icon, remote_refresh_kind};
+    use eframe::egui;
     use heroinn_util::ftp::FileInfo;
+
+    #[test]
+    fn disconnected_io_requests_normal_viewport_close_without_destroying_the_context() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let context = egui::Context::default();
+        let stopped = AtomicBool::new(false);
+        let mut active = context.run_ui(egui::RawInput::default(), |ui| {
+            assert!(!super::close_disconnected_viewport(ui.ctx(), &stopped));
+        });
+        active.textures_delta.clear();
+        assert!(active.viewport_output.values().all(|viewport| {
+            !viewport
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Close))
+        }));
+        stopped.store(true, Ordering::Release);
+        let mut closing = context.run_ui(egui::RawInput::default(), |ui| {
+            assert!(super::close_disconnected_viewport(ui.ctx(), &stopped));
+        });
+        closing.textures_delta.clear();
+        assert!(closing.viewport_output.values().any(|viewport| {
+            viewport
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Close))
+        }));
+        let mut subsequent = context.run_ui(egui::RawInput::default(), |_| {});
+        subsequent.textures_delta.clear();
+        assert!(
+            subsequent
+                .viewport_output
+                .contains_key(&egui::ViewportId::ROOT)
+        );
+    }
 
     fn file_info(typ: &str) -> FileInfo {
         FileInfo {
@@ -1051,6 +1067,71 @@ mod tests {
         assert_eq!(
             error.as_deref(),
             Some("Remote files unavailable: connection timed out")
+        );
+    }
+
+    #[test]
+    fn file_icon_opens_the_context_menu_on_secondary_click() {
+        let context = egui::Context::default();
+        let texture = context.load_texture(
+            "file-row-icon",
+            egui::ColorImage::filled([20, 20], egui::Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::Vec2::splat(100.0));
+        let mut icon_center = egui::pos2(10.0, 10.0);
+        let mut menu_opened = false;
+
+        let run_frame =
+            |events: Vec<egui::Event>, icon_center: &mut egui::Pos2, menu_opened: &mut bool| {
+                let input = egui::RawInput {
+                    screen_rect: Some(screen),
+                    events,
+                    ..Default::default()
+                };
+                let mut output = context.run_ui(input, |ui| {
+                    let response = file_row_icon(ui, &texture);
+                    *icon_center = response.rect.center();
+                    assert!(response.sense.senses_click());
+                    response.context_menu(|ui| {
+                        *menu_opened = true;
+                        ui.label("menu");
+                    });
+                });
+                output.textures_delta.clear();
+            };
+
+        run_frame(Vec::new(), &mut icon_center, &mut menu_opened);
+        run_frame(
+            vec![egui::Event::PointerMoved(icon_center)],
+            &mut icon_center,
+            &mut menu_opened,
+        );
+        run_frame(
+            vec![egui::Event::PointerButton {
+                pos: icon_center,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            }],
+            &mut icon_center,
+            &mut menu_opened,
+        );
+        run_frame(
+            vec![egui::Event::PointerButton {
+                pos: icon_center,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+            &mut icon_center,
+            &mut menu_opened,
+        );
+        run_frame(Vec::new(), &mut icon_center, &mut menu_opened);
+
+        assert!(
+            menu_opened,
+            "secondary-clicking the file icon must open the context menu"
         );
     }
 }

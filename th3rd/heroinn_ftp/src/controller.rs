@@ -760,7 +760,7 @@ mod tests {
             assert_eq!(packet.id().unwrap(), FTPId::Get);
             let request = TunnelRequest::parse(&packet.data).unwrap();
             let mut tunnel =
-                TcpConnection::connect(&format!("127.0.0.1:{}", request.port)).unwrap();
+                TcpConnection::connect_local_plain(&format!("127.0.0.1:{}", request.port)).unwrap();
             let header = FTPGetHeader::parse(&tunnel.recv().unwrap()).unwrap();
             assert_eq!(header.path, remote_path);
             assert_eq!(header.start_pos, expected_start);
@@ -845,7 +845,7 @@ mod tests {
             assert_eq!(packet.id().unwrap(), FTPId::Put);
             let request = TunnelRequest::parse(&packet.data).unwrap();
             let mut tunnel =
-                TcpConnection::connect(&format!("127.0.0.1:{}", request.port)).unwrap();
+                TcpConnection::connect_local_plain(&format!("127.0.0.1:{}", request.port)).unwrap();
             let header = FTPPutHeader::parse(&tunnel.recv().unwrap()).unwrap();
             assert_eq!(header.path, remote_path);
             assert_eq!(header.total_size, payload.len() as u64);

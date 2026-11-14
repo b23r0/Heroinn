@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use heroinn_util::socks5::{
-    SOCKS5_MAX_CONCURRENCY, SOCKS5_MAX_TUNNEL_CHUNK, SOCKS5_TARGET_CONNECT_TIMEOUT, Socks5Address,
+    SOCKS5_MAX_CONCURRENCY, SOCKS5_TARGET_CONNECT_TIMEOUT, SOCKS5_TUNNEL_PUMP_CHUNK, Socks5Address,
     Socks5ClientEvent, Socks5FailureCategory, Socks5ServerCommand, Socks5ServerOpen,
     Socks5TunnelFrame, sanitize_detail,
 };
@@ -408,15 +408,24 @@ fn connect_target(address: &Socks5Address, port: u16) -> heroinn_util::Result<Tc
 fn pump_stream(target: &TcpStream, tunnel: &Transport, cancel: Arc<StreamCancel>) -> (u64, u64) {
     let mut target_reader = match target.try_clone() {
         Ok(stream) => stream,
-        Err(_) => return (0, 0),
+        Err(error) => {
+            log::warn!("socks5 target reader clone failed: {error}");
+            return (0, 0);
+        }
     };
     let target_to_shutdown = match target.try_clone() {
         Ok(stream) => stream,
-        Err(_) => return (0, 0),
+        Err(error) => {
+            log::warn!("socks5 target shutdown clone failed: {error}");
+            return (0, 0);
+        }
     };
     let mut target_from_tunnel = match target.try_clone() {
         Ok(stream) => stream,
-        Err(_) => return (0, 0),
+        Err(error) => {
+            log::warn!("socks5 target writer clone failed: {error}");
+            return (0, 0);
+        }
     };
     let mut tunnel_sender = tunnel.clone();
     let mut tunnel_receiver = tunnel.clone();
@@ -425,32 +434,42 @@ fn pump_stream(target: &TcpStream, tunnel: &Transport, cancel: Arc<StreamCancel>
 
     let to_tunnel = std::thread::spawn(move || {
         let mut bytes = 0u64;
-        let mut buf = vec![0u8; SOCKS5_MAX_TUNNEL_CHUNK];
-        loop {
+        let mut buf = vec![0u8; SOCKS5_TUNNEL_PUMP_CHUNK];
+        'pump: loop {
             if cancel_to_tunnel.cancelled.load(Ordering::SeqCst) {
+                log::info!("socks5 target-to-tunnel cancelled");
+                break;
+            }
+            if let Err(error) = target_reader.set_read_timeout(None) {
+                log::warn!("socks5 target read timeout setup failed: {error}");
                 break;
             }
             match target_reader.read(&mut buf) {
                 Ok(0) => {
+                    log::info!("socks5 target reached EOF");
                     let _ = send_tunnel_frame(&mut tunnel_sender, &Socks5TunnelFrame::Fin);
                     break;
                 }
                 Ok(count) => {
-                    let frame = Socks5TunnelFrame::Data(buf[..count].to_vec());
-                    if send_tunnel_frame(&mut tunnel_sender, &frame).is_err() {
+                    bytes += count as u64;
+                    if let Err(error) = send_socks5_data(&mut tunnel_sender, buf[..count].to_vec())
+                    {
+                        log::warn!("socks5 target-to-tunnel send failed: {error}");
                         let _ = target_to_shutdown.shutdown(Shutdown::Both);
                         let _ = tunnel_sender.shutdown(Shutdown::Both);
-                        break;
+                        break 'pump;
                     }
-                    bytes += count as u64;
                 }
-                Err(_) => {
+                Err(error) => {
+                    log::warn!("socks5 target read failed: {error}");
                     let _ = send_tunnel_frame(&mut tunnel_sender, &Socks5TunnelFrame::Reset);
                     let _ = target_to_shutdown.shutdown(Shutdown::Both);
                     break;
                 }
             }
         }
+        let _ = target_reader.set_read_timeout(None);
+        log::info!("socks5 target-to-tunnel worker exited bytes={bytes}");
         bytes
     });
 
@@ -458,18 +477,21 @@ fn pump_stream(target: &TcpStream, tunnel: &Transport, cancel: Arc<StreamCancel>
         let mut bytes = 0u64;
         loop {
             if cancel_from_tunnel.cancelled.load(Ordering::SeqCst) {
+                log::info!("socks5 tunnel-to-target cancelled");
                 break;
             }
             let frame = match recv_tunnel_frame(&mut tunnel_receiver) {
                 Ok(frame) => frame,
-                Err(_) => {
+                Err(error) => {
+                    log::warn!("socks5 tunnel-to-target receive failed: {error}");
                     let _ = target_from_tunnel.shutdown(Shutdown::Both);
                     break;
                 }
             };
             match frame {
                 Socks5TunnelFrame::Data(data) => {
-                    if target_from_tunnel.write_all(&data).is_err() {
+                    if let Err(error) = target_from_tunnel.write_all(&data) {
+                        log::warn!("socks5 tunnel-to-target write failed: {error}");
                         let _ = tunnel_receiver.shutdown(Shutdown::Both);
                         break;
                     }
@@ -487,11 +509,15 @@ fn pump_stream(target: &TcpStream, tunnel: &Transport, cancel: Arc<StreamCancel>
                 Socks5TunnelFrame::Hello { .. } => {}
             }
         }
+        log::info!("socks5 tunnel-to-target worker exited bytes={bytes}");
         bytes
     });
 
     let bytes_to_target = to_tunnel.join().unwrap_or(0);
     let bytes_from_target = from_tunnel.join().unwrap_or(0);
+    log::info!(
+        "socks5 stream pump finished: target_to_tunnel={bytes_to_target} tunnel_to_target={bytes_from_target}"
+    );
     (bytes_to_target, bytes_from_target)
 }
 
@@ -500,6 +526,10 @@ fn send_tunnel_frame(
     frame: &Socks5TunnelFrame,
 ) -> heroinn_util::Result<()> {
     transfer::send(tunnel, &frame.to_payload()?)
+}
+
+fn send_socks5_data(tunnel: &mut Transport, data: Vec<u8>) -> heroinn_util::Result<()> {
+    send_tunnel_frame(tunnel, &Socks5TunnelFrame::Data(data))
 }
 
 fn recv_tunnel_frame(tunnel: &mut Transport) -> heroinn_util::Result<Socks5TunnelFrame> {
@@ -780,6 +810,140 @@ mod tests {
         }
         assert_eq!(echoed, payload);
         target_worker.join().unwrap();
+        drop(sidecar_tunnel);
+
+        manager.handle(Socks5ServerCommand::Shutdown {
+            session_id: "session".to_string(),
+        });
+        manager.close_all();
+        server.close();
+    }
+
+    #[test]
+    fn manager_flushes_sixteen_mebibytes_and_fin_through_a_websocket_tunnel() {
+        const SIZE: usize = 16 * 1024 * 1024;
+        const CHUNK: usize = 64 * 1024;
+        struct RestoreRate(u64);
+        impl Drop for RestoreRate {
+            fn drop(&mut self) {
+                let _ = crate::module::transfer::set_rate(self.0);
+            }
+        }
+        let _restore_rate = RestoreRate(crate::module::transfer::current_rate());
+        crate::module::transfer::set_rate(1024 * 1024 * 1024).unwrap();
+
+        let payload = (0..SIZE)
+            .map(|index| (index.wrapping_mul(31).wrapping_add(11)) as u8)
+            .collect::<Vec<_>>();
+
+        let target_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let target_address = target_listener.local_addr().unwrap();
+        let target_payload = payload.clone();
+        let target_worker = std::thread::spawn(move || {
+            let (mut target, _) = target_listener.accept().unwrap();
+            target
+                .set_read_timeout(Some(Duration::from_secs(30)))
+                .unwrap();
+            let mut received = Vec::with_capacity(target_payload.len());
+            let mut chunk = vec![0u8; CHUNK];
+            while received.len() < target_payload.len() {
+                let count = target.read(&mut chunk).unwrap();
+                if count == 0 {
+                    break;
+                }
+                received.extend_from_slice(&chunk[..count]);
+            }
+            assert_eq!(received.len(), target_payload.len());
+            assert_eq!(received, target_payload);
+            target.write_all(&target_payload).unwrap();
+            let _ = target.shutdown(Shutdown::Write);
+        });
+
+        let sidecar_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let sidecar_port = sidecar_listener.local_addr().unwrap().port();
+        let mut server = WSServer::new("127.0.0.1:0", Arc::new(|_| {})).unwrap();
+        let server_address = server.local_addr().unwrap().to_string();
+        let (sender, receiver) = mpsc::channel();
+        let mut manager = Socks5Manager::new(
+            "client",
+            HeroinnProtocol::HTTP,
+            &server_address,
+            Some(FrozenRoute::direct()),
+            Arc::new(TransportFactory::direct()),
+            sender,
+        );
+        manager.handle(Socks5ServerCommand::Start {
+            session_id: "session".to_string(),
+        });
+        manager.handle(Socks5ServerCommand::Open(Socks5ServerOpen {
+            session_id: "session".to_string(),
+            stream_id: 8,
+            target: Socks5Target::new(&target_address.ip().to_string(), target_address.port())
+                .unwrap(),
+            tunnel_port: sidecar_port,
+        }));
+
+        let (mut sidecar_tunnel, _) = sidecar_listener.accept().unwrap();
+        sidecar_tunnel
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+        sidecar_tunnel
+            .set_write_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+        assert_eq!(
+            Socks5TunnelFrame::read_from(&mut sidecar_tunnel).unwrap(),
+            Socks5TunnelFrame::Hello { stream_id: 8 }
+        );
+        let accepted = receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("open result");
+        let frame = Message::new(
+            "127.0.0.1:1".parse().unwrap(),
+            HeroinnProtocol::HTTP,
+            &accepted,
+        )
+        .unwrap();
+        assert!(matches!(
+            frame.parse_socks5_client_event().unwrap(),
+            Socks5ClientEvent::OpenResult { accepted: true, .. }
+        ));
+
+        let mut sidecar_reader = sidecar_tunnel.try_clone().unwrap();
+        sidecar_reader
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+        let echo_reader = std::thread::spawn(move || {
+            let mut echoed = Vec::with_capacity(SIZE);
+            let mut saw_fin = false;
+            while !saw_fin {
+                match Socks5TunnelFrame::read_from(&mut sidecar_reader).expect("large tunnel frame")
+                {
+                    Socks5TunnelFrame::Data(data) => echoed.extend_from_slice(&data),
+                    Socks5TunnelFrame::Fin => saw_fin = true,
+                    other => panic!("unexpected tunnel frame: {other:?}"),
+                }
+            }
+            echoed
+        });
+
+        let mut sidecar_written = 0usize;
+        for chunk in payload.chunks(CHUNK) {
+            if let Err(error) =
+                Socks5TunnelFrame::Data(chunk.to_vec()).write_to(&mut sidecar_tunnel)
+            {
+                panic!("sidecar write failed after {sidecar_written} bytes: {error}");
+            }
+            sidecar_written += chunk.len();
+        }
+        Socks5TunnelFrame::Fin
+            .write_to(&mut sidecar_tunnel)
+            .unwrap();
+
+        let echoed = echo_reader.join().unwrap();
+        assert_eq!(echoed.len(), SIZE);
+        assert_eq!(echoed, payload);
+        target_worker.join().unwrap();
+        drop(sidecar_tunnel);
 
         manager.handle(Socks5ServerCommand::Shutdown {
             session_id: "session".to_string(),

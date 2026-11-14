@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -28,6 +28,228 @@ pub const MAX_OUTGOING_BUFFER: usize = 256 * 1024;
 pub const MAX_INCOMING_BUFFER: usize = 1024 * 1024;
 const DRIVER_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SocketWait {
+    Read,
+    Write,
+}
+
+pub(crate) struct SocketWake {
+    socket: UdpSocket,
+    pending: AtomicBool,
+}
+
+impl SocketWake {
+    pub(crate) fn new() -> io::Result<Self> {
+        let socket = UdpSocket::bind(("127.0.0.1", 0))?;
+        socket.connect(socket.local_addr()?)?;
+        socket.set_nonblocking(true)?;
+        Ok(Self {
+            socket,
+            pending: AtomicBool::new(false),
+        })
+    }
+
+    pub(crate) fn notify(&self) {
+        if !self.pending.swap(true, Ordering::AcqRel) {
+            let _ = self.socket.send(&[1]);
+        }
+    }
+
+    pub(crate) fn drain(&self) {
+        self.pending.store(false, Ordering::Release);
+        let mut bytes = [0; 64];
+        while self.socket.recv(&mut bytes).is_ok() {}
+    }
+}
+
+pub(crate) fn wait_tcp_activity(
+    stream: &TcpStream,
+    wake: &SocketWake,
+    readable: bool,
+    writable: bool,
+    timeout: Duration,
+) -> io::Result<bool> {
+    let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let mut descriptors = [
+            libc::pollfd {
+                fd: if readable || writable {
+                    stream.as_raw_fd()
+                } else {
+                    -1
+                },
+                events: if readable { libc::POLLIN } else { 0 }
+                    | if writable { libc::POLLOUT } else { 0 },
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: wake.socket.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        loop {
+            let result = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, timeout_ms) };
+            if result >= 0 {
+                return Ok(result > 0);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{POLLIN, POLLOUT, WSAPOLLFD, WSAPoll};
+        let data = WSAPOLLFD {
+            fd: stream.as_raw_socket() as usize,
+            events: if readable { POLLIN } else { 0 } | if writable { POLLOUT } else { 0 },
+            revents: 0,
+        };
+        let signal = WSAPOLLFD {
+            fd: wake.socket.as_raw_socket() as usize,
+            events: POLLIN,
+            revents: 0,
+        };
+        let mut descriptors = [signal, data];
+        let count = if readable || writable { 2 } else { 1 };
+        loop {
+            let result = unsafe { WSAPoll(descriptors.as_mut_ptr(), count, timeout_ms) };
+            if result >= 0 {
+                return Ok(result > 0);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (stream, wake, readable, writable, timeout_ms);
+        Ok(false)
+    }
+}
+
+pub(crate) fn wait_tcp_listener(listener: &TcpListener, timeout: Duration) -> io::Result<bool> {
+    let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+    #[cfg(unix)]
+    let result = {
+        use std::os::fd::AsRawFd;
+        let mut descriptor = libc::pollfd {
+            fd: listener.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        unsafe { libc::poll(&mut descriptor, 1, timeout_ms) }
+    };
+    #[cfg(windows)]
+    let result = {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{POLLIN, WSAPOLLFD, WSAPoll};
+        let mut descriptor = WSAPOLLFD {
+            fd: listener.as_raw_socket() as usize,
+            events: POLLIN,
+            revents: 0,
+        };
+        unsafe { WSAPoll(&mut descriptor, 1, timeout_ms) }
+    };
+    #[cfg(not(any(unix, windows)))]
+    let result = {
+        let _ = (listener, timeout_ms);
+        0
+    };
+    if result >= 0 {
+        return Ok(result > 0);
+    }
+    let error = io::Error::last_os_error();
+    if error.kind() == io::ErrorKind::Interrupted {
+        Ok(false)
+    } else {
+        Err(error)
+    }
+}
+
+/// Wait for socket readiness without sleeping through the platform timer
+/// granularity. Windows rounds a 1 ms `sleep` to roughly 16 ms, which would
+/// throttle every WebSocket poll iteration.
+#[cfg(test)]
+pub(crate) fn wait_tcp_socket(
+    stream: &TcpStream,
+    wait: SocketWait,
+    timeout: Duration,
+) -> io::Result<bool> {
+    let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        let events = match wait {
+            SocketWait::Read => libc::POLLIN,
+            SocketWait::Write => libc::POLLOUT,
+        };
+        let mut descriptor = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events,
+            revents: 0,
+        };
+        loop {
+            let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+            if result < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            return Ok(result > 0);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{POLLIN, POLLOUT, WSAPOLLFD, WSAPoll};
+
+        let events = match wait {
+            SocketWait::Read => POLLIN,
+            SocketWait::Write => POLLOUT,
+        };
+        let mut descriptor = WSAPOLLFD {
+            fd: stream.as_raw_socket() as usize,
+            events,
+            revents: 0,
+        };
+        loop {
+            let result = unsafe { WSAPoll(&mut descriptor, 1, timeout_ms) };
+            if result < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            return Ok(result > 0);
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (stream, wait, timeout_ms);
+        Ok(false)
+    }
+}
 
 /// Credential-free identity of the proxy chain selected for a live connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -332,6 +554,34 @@ impl OutboundStream {
         match &*self.inner {
             Inner::Plain(plain) => plain.stream.set_nonblocking(enabled),
             Inner::Tls(_) => Ok(()),
+        }
+    }
+
+    /// Native polling is safe for plain sockets. TLS consumers remain on the
+    /// driver's condvar-backed read timeout because switching the TLS stream
+    /// itself would bypass the driver state machine.
+    pub(crate) fn enable_nonblocking_poll(&self) -> io::Result<bool> {
+        match &*self.inner {
+            Inner::Plain(plain) => {
+                plain.stream.set_nonblocking(true)?;
+                Ok(true)
+            }
+            Inner::Tls(_) => Ok(false),
+        }
+    }
+
+    pub(crate) fn wait_ws_activity(
+        &self,
+        wake: &SocketWake,
+        readable: bool,
+        writable: bool,
+        timeout: Duration,
+    ) -> io::Result<bool> {
+        match &*self.inner {
+            Inner::Plain(plain) => {
+                wait_tcp_activity(&plain.stream, wake, readable, writable, timeout)
+            }
+            Inner::Tls(_) => Ok(false),
         }
     }
 
@@ -1460,6 +1710,172 @@ pub(crate) mod tests {
     use std::time::{Duration, Instant};
 
     type SocksAuthObservation = (Vec<u8>, Vec<u8>, String);
+
+    #[test]
+    fn listener_readiness_wakes_for_a_connection_before_the_idle_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let address = listener.local_addr().expect("address");
+        let (entered, ready) = mpsc::sync_channel(1);
+        let (finished, result) = mpsc::sync_channel(1);
+        let waiter = thread::spawn(move || {
+            entered.send(()).expect("signal waiter");
+            let readable = wait_tcp_listener(&listener, Duration::from_secs(2))
+                .expect("wait for incoming connection");
+            finished.send(readable).expect("signal readiness");
+            let (stream, _) = listener.accept().expect("accept ready connection");
+            stream.peer_addr().expect("connected peer")
+        });
+        ready
+            .recv_timeout(Duration::from_secs(2))
+            .expect("waiter entered");
+        let client = TcpStream::connect(address).expect("client");
+        assert!(
+            result
+                .recv_timeout(Duration::from_millis(500))
+                .expect("readiness wake"),
+            "an incoming connection must wake the listener without waiting for its idle deadline"
+        );
+        assert_eq!(
+            waiter.join().expect("waiter joined"),
+            client.local_addr().expect("client address")
+        );
+    }
+
+    #[test]
+    fn listener_readiness_times_out_without_consuming_future_connections() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let started = Instant::now();
+        assert!(!wait_tcp_listener(&listener, Duration::from_millis(25)).expect("idle timeout"));
+        assert!(started.elapsed() >= Duration::from_millis(10));
+        assert_eq!(
+            listener.accept().expect_err("still idle").kind(),
+            io::ErrorKind::WouldBlock
+        );
+        let client = TcpStream::connect(listener.local_addr().expect("address")).expect("client");
+        assert!(wait_tcp_listener(&listener, Duration::from_secs(2)).expect("connection ready"));
+        let (stream, _) = listener.accept().expect("accept");
+        assert_eq!(
+            stream.peer_addr().expect("peer"),
+            client.local_addr().expect("client address")
+        );
+        assert!(!wait_tcp_listener(&listener, Duration::ZERO).expect("queue drained"));
+    }
+
+    #[test]
+    fn socket_activity_is_woken_by_a_queued_command_without_peer_data() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let client = TcpStream::connect(listener.local_addr().expect("address")).expect("client");
+        let (_server, _) = listener.accept().expect("server");
+        let wake = Arc::new(SocketWake::new().expect("wake"));
+        let waiter_wake = wake.clone();
+        let (entered, ready) = mpsc::sync_channel(1);
+        let waiter = thread::spawn(move || {
+            entered.send(()).expect("signal waiter");
+            wait_tcp_activity(&client, &waiter_wake, true, false, Duration::from_secs(2))
+                .expect("wait for socket or command")
+        });
+        ready
+            .recv_timeout(Duration::from_secs(2))
+            .expect("waiter entered");
+        for _ in 0..256 {
+            wake.notify();
+        }
+        assert!(waiter.join().expect("waiter joined"));
+        wake.drain();
+        assert!(!wake.pending.load(Ordering::Acquire));
+        wake.notify();
+        let mut byte = [0; 1];
+        assert_eq!(wake.socket.recv(&mut byte).expect("subsequent wake"), 1);
+        assert_eq!(byte, [1]);
+    }
+
+    #[test]
+    fn paused_socket_reads_wait_for_capacity_instead_of_readable_data() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let client = TcpStream::connect(listener.local_addr().expect("address")).expect("client");
+        let (mut server, _) = listener.accept().expect("server");
+        server
+            .write_all(b"unconsumed frame")
+            .expect("pending peer data");
+        assert!(
+            wait_tcp_socket(&client, SocketWait::Read, Duration::from_secs(2)).expect("readable")
+        );
+        let wake = SocketWake::new().expect("wake");
+        assert!(!wait_tcp_activity(&client, &wake, false, false, Duration::ZERO).expect("paused"));
+        wake.notify();
+        assert!(
+            wait_tcp_activity(&client, &wake, false, false, Duration::from_secs(2))
+                .expect("capacity wake")
+        );
+        wake.drain();
+        assert!(!wait_tcp_activity(&client, &wake, false, false, Duration::ZERO).expect("drained"));
+    }
+
+    #[test]
+    fn socket_wait_wakes_immediately_when_data_arrives() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let mut client = TcpStream::connect(address).expect("client");
+        let (mut server, _) = listener.accept().expect("accepted server");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            server.write_all(b"x").expect("write readiness byte");
+            server.flush().expect("flush readiness byte");
+        });
+
+        let started = Instant::now();
+        assert!(
+            wait_tcp_socket(&client, SocketWait::Read, Duration::from_secs(2))
+                .expect("socket readiness wait")
+        );
+        let elapsed = started.elapsed();
+        writer.join().expect("writer thread");
+        let mut byte = [0u8; 1];
+        client.read_exact(&mut byte).expect("read readiness byte");
+        assert_eq!(&byte, b"x");
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "readiness wake was delayed by {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn socket_wait_times_out_without_data() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let client = TcpStream::connect(address).expect("client");
+        let (_server, _) = listener.accept().expect("accepted server");
+
+        let started = Instant::now();
+        assert!(
+            !wait_tcp_socket(&client, SocketWait::Read, Duration::from_millis(25))
+                .expect("socket timeout wait")
+        );
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(10),
+            "wait returned too early: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "wait exceeded bound: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn socket_wait_reports_writability_for_a_connected_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("listener address");
+        let client = TcpStream::connect(address).expect("client");
+        let (_server, _) = listener.accept().expect("accepted server");
+
+        assert!(
+            wait_tcp_socket(&client, SocketWait::Write, Duration::from_millis(500))
+                .expect("socket writability wait")
+        );
+    }
 
     fn test_tls_connector() -> TlsConnector {
         let ca = Certificate::from_pem(include_bytes!("../../tests/fixtures/tls/ca.pem"))

@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use std::io::{Read, Write};
 
 /// Largest single frame accepted on any Heroinn transport.
-pub const MAX_PACKET: usize = 1024 * 9999;
+pub const MAX_PACKET: usize = 10 * 1024 * 1024;
 
 /// Read one `u32` big-endian length-prefixed frame.
 pub fn read_frame<R: Read>(reader: &mut R) -> Result<Vec<u8>> {
@@ -85,5 +85,23 @@ mod tests {
         encoded.extend_from_slice(&((MAX_PACKET + 1) as u32).to_be_bytes());
         let error = read_frame(&mut Cursor::new(encoded)).unwrap_err();
         assert!(matches!(error, Error::PacketTooLarge(size) if size == MAX_PACKET + 1));
+    }
+
+    #[test]
+    fn exact_ten_mebibyte_frame_round_trips_and_one_byte_over_is_rejected() {
+        let payload = vec![0x5a; 10 * 1024 * 1024];
+        let mut encoded = Vec::new();
+        write_frame(&mut encoded, &payload).unwrap();
+        assert_eq!(
+            u32::from_be_bytes(encoded[..4].try_into().unwrap()) as usize,
+            payload.len()
+        );
+        let mut cursor = Cursor::new(encoded);
+        assert_eq!(read_frame(&mut cursor).unwrap(), payload);
+
+        let mut writer = Vec::new();
+        let error = write_frame(&mut writer, &vec![0; 10 * 1024 * 1024 + 1]).unwrap_err();
+        assert!(matches!(error, Error::PacketTooLarge(size) if size == 10 * 1024 * 1024 + 1));
+        assert!(writer.is_empty());
     }
 }

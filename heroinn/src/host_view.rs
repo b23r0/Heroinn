@@ -275,10 +275,16 @@ fn center_x(rect: Rect) -> f32 {
     (rect.left() + rect.right()) / 2.0
 }
 
-pub fn draw_host_platform_icon(ui: &mut Ui, info: &HostInfo) -> Response {
+fn draw_host_platform_icon_sized(ui: &mut Ui, info: &HostInfo, size: Vec2) -> Response {
     let platform = HostPlatform::from_info(info);
-    let (response, _) = ui.allocate_painter(Vec2::splat(HOST_ICON_SIZE), Sense::hover());
-    let rect = Rect::from_center_size(response.rect.center(), Vec2::splat(HOST_ICON_SIZE));
+    let (response, _) = ui.allocate_painter(size, Sense::click());
+    let rect = Rect::from_min_size(
+        pos2(
+            response.rect.left(),
+            response.rect.center().y - HOST_ICON_SIZE / 2.0,
+        ),
+        Vec2::splat(HOST_ICON_SIZE),
+    );
     let accent = platform.accent(ui.visuals().dark_mode);
     match platform {
         HostPlatform::Linux => draw_linux(ui, rect, accent),
@@ -288,6 +294,23 @@ pub fn draw_host_platform_icon(ui: &mut Ui, info: &HostInfo) -> Response {
     }
     let os = sanitize_tooltip_os(&info.os);
     response.on_hover_text(format!("{} — {}", platform.label(), os))
+}
+
+#[cfg(test)]
+pub fn draw_host_platform_icon(ui: &mut Ui, info: &HostInfo) -> Response {
+    draw_host_platform_icon_sized(ui, info, Vec2::splat(HOST_ICON_SIZE))
+}
+
+pub fn draw_host_platform_icon_cell(ui: &mut Ui, info: &HostInfo) -> Response {
+    let available = ui.available_size();
+    draw_host_platform_icon_sized(
+        ui,
+        info,
+        Vec2::new(
+            available.x.max(HOST_ICON_SIZE),
+            available.y.max(HOST_ICON_SIZE),
+        ),
+    )
 }
 
 fn sanitize_tooltip_os(os: &str) -> String {
@@ -474,9 +497,92 @@ mod tests {
                     let response = draw_host_platform_icon(ui, &info(platform_id, os));
                     assert_eq!(response.rect.width(), HOST_ICON_SIZE);
                     assert_eq!(response.rect.height(), HOST_ICON_SIZE);
+                    assert!(response.sense.senses_click());
                 });
                 output.textures_delta.clear();
             }
         }
+    }
+
+    #[test]
+    fn platform_icon_cell_opens_the_context_menu_on_icon_and_blank_area() {
+        let menu_opens_at = |click_offset: Vec2| {
+            let context = egui::Context::default();
+            let screen = Rect::from_min_size(pos2(0.0, 0.0), Vec2::splat(200.0));
+            let mut click_pos = pos2(40.0, 40.0);
+            let mut menu_opened = false;
+
+            let run_frame =
+                |events: Vec<egui::Event>, click_pos: &mut egui::Pos2, menu_opened: &mut bool| {
+                    let input = egui::RawInput {
+                        screen_rect: Some(screen),
+                        events,
+                        ..Default::default()
+                    };
+                    let mut output = context.run_ui(input, |ui| {
+                        let cell_rect = Rect::from_min_size(
+                            ui.max_rect().min,
+                            Vec2::new(HOST_ICON_COLUMN_WIDTH, HOST_ROW_HEIGHT),
+                        );
+                        let mut cell = ui.new_child(
+                            egui::UiBuilder::new()
+                                .id_salt("host-icon-cell")
+                                .max_rect(cell_rect)
+                                .layout(egui::Layout::left_to_right(egui::Align::Center))
+                                .sense(Sense::click()),
+                        );
+                        let response =
+                            draw_host_platform_icon_cell(&mut cell, &info(Some("linux"), "Linux"));
+                        *click_pos = response.rect.min + click_offset;
+                        response.context_menu(|ui| {
+                            *menu_opened = true;
+                            ui.label("menu");
+                        });
+                    });
+                    output.textures_delta.clear();
+                };
+
+            run_frame(Vec::new(), &mut click_pos, &mut menu_opened);
+            run_frame(
+                vec![egui::Event::PointerMoved(click_pos)],
+                &mut click_pos,
+                &mut menu_opened,
+            );
+            run_frame(
+                vec![egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                &mut click_pos,
+                &mut menu_opened,
+            );
+            run_frame(
+                vec![egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                &mut click_pos,
+                &mut menu_opened,
+            );
+            run_frame(Vec::new(), &mut click_pos, &mut menu_opened);
+
+            menu_opened
+        };
+
+        assert!(
+            menu_opens_at(Vec2::new(HOST_ICON_SIZE / 2.0, HOST_ROW_HEIGHT / 2.0)),
+            "secondary-clicking the icon itself must open the context menu"
+        );
+        assert!(
+            menu_opens_at(Vec2::new(
+                HOST_ICON_COLUMN_WIDTH - 2.0,
+                HOST_ROW_HEIGHT / 2.0
+            )),
+            "secondary-clicking the blank part of the icon cell must open the context menu"
+        );
     }
 }

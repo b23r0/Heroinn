@@ -18,6 +18,15 @@ const MAX_BURST_BYTES: u64 = 256 * 1024;
 /// Longest single sleep, keeping rate changes responsive.
 const MAX_SLEEP: Duration = Duration::from_millis(50);
 
+/// Waits below this bound are spun instead of handed to the OS timer.
+///
+/// High configured limits split a 64 KiB frame into sub-millisecond token
+/// waits. Windows rounds short sleeps up to its scheduler quantum, so a
+/// 250 µs wait becomes roughly 1.5 ms and the effective limit collapses to
+/// a fraction of the configured rate. Spinning the short remainder preserves
+/// the token-bucket semantics while keeping high limits achievable.
+const SHORT_WAIT: Duration = Duration::from_millis(2);
+
 static G_LIMITER: LazyLock<TransferLimiter> =
     LazyLock::new(|| TransferLimiter::new(DEFAULT_TRANSFER_RATE));
 static G_IN_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -113,10 +122,21 @@ impl TransferLimiter {
             };
 
             match wait {
-                Some(wait) => std::thread::sleep(wait.min(MAX_SLEEP)),
+                Some(wait) => wait_for_tokens(wait),
                 None => remaining -= chunk,
             }
         }
+    }
+}
+
+fn wait_for_tokens(wait: Duration) {
+    if wait >= SHORT_WAIT {
+        std::thread::sleep(wait.min(MAX_SLEEP));
+        return;
+    }
+    let deadline = Instant::now() + wait;
+    while Instant::now() < deadline {
+        std::thread::yield_now();
     }
 }
 
@@ -233,6 +253,21 @@ mod tests {
         assert!(
             start.elapsed() >= Duration::from_millis(900),
             "concurrent transfers must not exceed the aggregate limit"
+        );
+    }
+
+    #[test]
+    fn short_token_waits_do_not_oversleep_on_the_os_timer() {
+        let start = Instant::now();
+        for _ in 0..50 {
+            wait_for_tokens(Duration::from_micros(200));
+        }
+        // 50 * 200 us of intentional pacing. Handing each wait to the
+        // Windows scheduler turns this into >= 75 ms; spinning keeps the
+        // total close to the token budget.
+        assert!(
+            start.elapsed() < Duration::from_millis(60),
+            "short token waits must not use the coarse OS timer"
         );
     }
 }

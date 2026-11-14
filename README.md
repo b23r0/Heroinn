@@ -37,6 +37,7 @@ authorized security research and red-team exercises.
 - Configure the aggregate transfer-rate limit per agent (default 1 MB/s).
 - SOCKS5 reverse proxy support through proxy chains.
 - TCP, HTTP, and reliable UDP transports.
+- End-to-end encrypted transport (Noise_NN_25519_ChaChaPoly_BLAKE2s)
 - Windows 10+ (Windows Server 2019+), Linux, BSD, and macOS support.
 - For TCP and HTTP communication, agents automatically discover the proxy from
   environment variables or the current desktop/user system settings and can

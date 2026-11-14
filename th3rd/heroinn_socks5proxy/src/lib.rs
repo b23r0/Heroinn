@@ -16,9 +16,9 @@ use heroinn_util::protocol::frame::{MAX_PACKET, write_frame};
 use heroinn_util::socks5::{
     SOCKS5_MAX_CONCURRENCY, SOCKS5_MAX_TUNNEL_CHUNK, SOCKS5_REP_COMMAND_NOT_SUPPORTED,
     SOCKS5_REP_GENERAL_FAILURE, SOCKS5_TARGET_CONNECT_TIMEOUT, SOCKS5_TUNNEL_CONNECT_TIMEOUT,
-    Socks5FailureCategory, Socks5Request, Socks5RequestCommand, Socks5SidecarCommand,
-    Socks5SidecarEvent, Socks5SidecarReady, Socks5Target, Socks5TunnelFrame, negotiate_noauth,
-    sanitize_detail, write_socks5_reply,
+    SOCKS5_TUNNEL_PUMP_CHUNK, Socks5FailureCategory, Socks5Request, Socks5RequestCommand,
+    Socks5SidecarCommand, Socks5SidecarEvent, Socks5SidecarReady, Socks5Target, Socks5TunnelFrame,
+    negotiate_noauth, sanitize_detail, write_socks5_reply,
 };
 use socket2::{Domain, Socket, Type};
 
@@ -1753,22 +1753,24 @@ fn pump_stream(
         .name(format!("socks5-up-{stream_id}"))
         .spawn(move || {
             let mut bytes = 0u64;
-            let mut buffer = vec![0u8; SOCKS5_MAX_TUNNEL_CHUNK];
+            let mut buffer = vec![0u8; SOCKS5_TUNNEL_PUMP_CHUNK];
             loop {
                 if stopped_to_tunnel.load(Ordering::SeqCst) {
                     break;
                 }
-                match read_or_cancel(
-                    &mut client_reader,
-                    &mut buffer,
-                    &stopped_to_tunnel,
-                    &cancelled_to_tunnel,
-                ) {
-                    Ok(Some(0)) => {
+                if client_reader
+                    .set_read_timeout(Some(DATA_PLANE_POLL))
+                    .is_err()
+                {
+                    break;
+                }
+                match client_reader.read(&mut buffer) {
+                    Ok(0) => {
                         let _ = Socks5TunnelFrame::Fin.write_to(&mut tunnel_writer);
                         break;
                     }
-                    Ok(Some(count)) => {
+                    Ok(count) => {
+                        bytes += count as u64;
                         if Socks5TunnelFrame::Data(buffer[..count].to_vec())
                             .write_to(&mut tunnel_writer)
                             .is_err()
@@ -1777,13 +1779,15 @@ fn pump_stream(
                             registry_to_tunnel.remove(stream_id);
                             break;
                         }
-                        bytes += count as u64;
                     }
-                    Ok(None) => {
-                        let _ = client_to_shutdown.shutdown(Shutdown::Both);
-                        registry_to_tunnel.remove(stream_id);
-                        break;
+                    Err(error) if is_read_timeout(&error) => {
+                        if is_cancelled(&stopped_to_tunnel, &cancelled_to_tunnel) {
+                            let _ = client_to_shutdown.shutdown(Shutdown::Both);
+                            registry_to_tunnel.remove(stream_id);
+                            break;
+                        }
                     }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                     Err(_) => {
                         let _ = Socks5TunnelFrame::Reset.write_to(&mut tunnel_writer);
                         let _ = client_to_shutdown.shutdown(Shutdown::Both);
@@ -1948,6 +1952,7 @@ impl TunnelFrameReader {
     }
 }
 
+#[cfg(test)]
 fn read_or_cancel(
     reader: &mut TcpStream,
     buffer: &mut [u8],
