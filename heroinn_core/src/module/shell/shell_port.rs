@@ -427,18 +427,14 @@ fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = path.metadata() else {
         return false;
     };
-    if !metadata.is_file() {
-        return false;
-    }
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
     }
     #[cfg(not(unix))]
     {
-        true
+        metadata.is_file()
     }
 }
 
@@ -780,6 +776,24 @@ mod tests {
                 Err(ShellLaunchError::NotExecutable { .. })
             ));
         }
+    }
+
+    #[test]
+    fn executable_candidates_reject_missing_paths_and_directories() {
+        let directory = TempDir::new();
+        let missing = directory.0.join("missing-shell");
+        assert!(!is_executable_file(&missing));
+        assert!(!is_executable_file(&directory.0));
+
+        let candidate = directory.0.join("shell-candidate");
+        write_candidate(&candidate, true);
+        assert!(is_executable_file(&candidate));
+
+        write_candidate(&candidate, false);
+        #[cfg(unix)]
+        assert!(!is_executable_file(&candidate));
+        #[cfg(not(unix))]
+        assert!(is_executable_file(&candidate));
     }
 
     #[test]
