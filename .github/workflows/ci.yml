@@ -107,7 +107,17 @@ jobs:
           -- -D warnings
 
       - name: Run first-party and supporting tests
-        run: cargo test --workspace --exclude heroinn_shell_terminal --locked
+        id: workspace-tests
+        run: ${{ runner.os == 'Windows' && '& ./.github/scripts/windows-workspace-tests.ps1' || 'cargo test --workspace --exclude heroinn_shell_terminal --locked' }}
+
+      - name: Preserve Windows workspace test diagnostics
+        if: ${{ always() && runner.os == 'Windows' && (steps.workspace-tests.outcome == 'success' || steps.workspace-tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-workspace-test-diagnostics
+          path: ${{ runner.temp }}/heroinn-workspace-tests/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run vendored terminal library tests
         run: cargo test -p heroinn_shell_terminal --lib --locked

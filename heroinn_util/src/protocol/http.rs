@@ -7,7 +7,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -74,6 +74,7 @@ struct WsActorControl {
     close_ack: Arc<Mutex<Option<mpsc::SyncSender<()>>>>,
     send_space: Arc<(Mutex<()>, Condvar)>,
     wake: Arc<SocketWake>,
+    flushed: Arc<AtomicU64>,
 }
 
 trait WsReadControl {
@@ -144,9 +145,10 @@ struct WsSession {
     close_requested: Arc<AtomicBool>,
     close_ack: Arc<Mutex<Option<mpsc::SyncSender<()>>>>,
     close_lock: Mutex<()>,
-    send_lock: Mutex<()>,
+    send_lock: Mutex<u64>,
     send_space: Arc<(Mutex<()>, Condvar)>,
     wake: Arc<SocketWake>,
+    flushed: Arc<AtomicU64>,
     close: Arc<dyn Fn(Shutdown) + Send + Sync>,
     join: Mutex<Option<JoinHandle<()>>>,
 }
@@ -173,6 +175,8 @@ impl WsSession {
         let actor_send_space = send_space.clone();
         let wake = Arc::new(SocketWake::new().map_err(Error::Io)?);
         let actor_wake = wake.clone();
+        let flushed = Arc::new(AtomicU64::new(0));
+        let actor_flushed = flushed.clone();
         let join = thread::Builder::new()
             .name("ws-actor".to_string())
             .spawn(move || {
@@ -186,6 +190,7 @@ impl WsSession {
                         close_ack: actor_close_ack,
                         send_space: actor_send_space,
                         wake: actor_wake,
+                        flushed: actor_flushed,
                     },
                 );
                 actor_done.store(true, Ordering::Release);
@@ -200,9 +205,10 @@ impl WsSession {
             close_requested,
             close_ack,
             close_lock: Mutex::new(()),
-            send_lock: Mutex::new(()),
+            send_lock: Mutex::new(0),
             send_space,
             wake,
+            flushed,
             close,
             join: Mutex::new(Some(join)),
         }))
@@ -217,7 +223,7 @@ impl WsSession {
         let mut command = WsCommand::Binary(payload.to_vec());
         loop {
             {
-                let _send_guard = self
+                let mut queued = self
                     .send_lock
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -229,12 +235,16 @@ impl WsSession {
                 if remaining.is_zero() {
                     return Err(Error::Timeout);
                 }
+                let next = queued
+                    .checked_add(1)
+                    .ok_or_else(|| Error::Other("ws send sequence exhausted".to_string()))?;
                 let (space, wake) = &*self.send_space;
                 let space = space
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 match self.send_tx.try_send(command) {
                     Ok(()) => {
+                        *queued = next;
                         self.wake.notify();
                         return Ok(());
                     }
@@ -252,12 +262,16 @@ impl WsSession {
         let deadline = Instant::now() + WS_SEND_TIMEOUT;
         let (ack_tx, ack_rx) = mpsc::sync_channel(1);
         let mut command = WsCommand::Flush(ack_tx);
+        let target;
         loop {
             {
-                let _send_guard = self
+                let queued = self
                     .send_lock
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if self.flushed.load(Ordering::Acquire) >= *queued {
+                    return Ok(());
+                }
                 if self.stop.load(Ordering::Acquire) || self.close_requested.load(Ordering::Acquire)
                 {
                     return Err(Error::Other("ws closed".to_string()));
@@ -272,6 +286,7 @@ impl WsSession {
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 match self.send_tx.try_send(command) {
                     Ok(()) => {
+                        target = *queued;
                         self.wake.notify();
                         break;
                     }
@@ -283,10 +298,13 @@ impl WsSession {
                 let _ = wake.wait_timeout(space, remaining);
             }
         }
-        match ack_rx.recv_timeout(WS_SEND_TIMEOUT) {
-            Ok(()) => Ok(()),
+        let result = ack_rx.recv_timeout(WS_SEND_TIMEOUT);
+        if self.flushed.load(Ordering::Acquire) >= target {
+            return Ok(());
+        }
+        match result {
             Err(mpsc::RecvTimeoutError::Timeout) => Err(Error::Timeout),
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 Err(Error::Other("ws writer stopped".to_string()))
             }
         }
@@ -470,7 +488,9 @@ fn ws_actor<S>(
         close_ack,
         send_space,
         wake,
+        flushed,
     } = control;
+    let mut written = 0u64;
     let mut pending_in: Option<Vec<u8>> = None;
     let mut pending_out = VecDeque::new();
     let mut pending_flush: Option<mpsc::SyncSender<()>> = None;
@@ -495,10 +515,13 @@ fn ws_actor<S>(
         if flush_pending {
             match socket.flush() {
                 Ok(()) => {
+                    flushed.store(written, Ordering::Release);
                     last_activity = Instant::now();
                     progressed = true;
                     flush_pending = false;
-                    if let Some(ack) = pending_flush.take() {
+                    if pending_out.is_empty()
+                        && let Some(ack) = pending_flush.take()
+                    {
                         let _ = ack.try_send(());
                     }
                 }
@@ -519,6 +542,7 @@ fn ws_actor<S>(
             let result = socket.flush();
             match result {
                 Ok(()) => {
+                    flushed.store(written, Ordering::Release);
                     last_activity = Instant::now();
                     progressed = true;
                     if let Some(ack) = pending_flush.take() {
@@ -553,15 +577,21 @@ fn ws_actor<S>(
                 }
                 while let Some(payload) = pending_out.pop_front() {
                     match socket.write(Message::Binary(payload.into())) {
-                        Ok(()) => {}
-                        Err(error) if is_transient_io(&error) => {}
-                        Err(_) => break,
+                        Ok(()) => written += 1,
+                        Err(error) if is_transient_io(&error) => written += 1,
+                        Err(_) => {
+                            finished = true;
+                            break;
+                        }
                     }
                 }
-                if let Err(error) = socket.flush()
-                    && !is_transient_io(&error)
-                {
+                if finished {
                     break;
+                }
+                match socket.flush() {
+                    Ok(()) => flushed.store(written, Ordering::Release),
+                    Err(error) if is_transient_io(&error) => continue,
+                    Err(_) => break,
                 }
                 if let Some(ack) = pending_flush.take() {
                     let _ = ack.try_send(());
@@ -571,11 +601,13 @@ fn ws_actor<S>(
                 let _ = ack.try_send(());
             }
             match socket.close(None) {
-                Ok(()) => {}
+                Ok(()) => flushed.store(written, Ordering::Release),
                 Err(error) if is_transient_io(&error) || is_closed_error(&error) => {}
                 Err(error) => log::debug!("ws close frame failed: {error}"),
             }
-            flush_ws_until(&mut socket, &stop, Instant::now() + WS_CLOSE_FLUSH_TIMEOUT);
+            if flush_ws_until(&mut socket, &stop, Instant::now() + WS_CLOSE_FLUSH_TIMEOUT) {
+                flushed.store(written, Ordering::Release);
+            }
             break;
         }
 
@@ -588,12 +620,16 @@ fn ws_actor<S>(
         if !flush_pending && !pending_out.is_empty() {
             while let Some(payload) = pending_out.pop_front() {
                 match socket.write(Message::Binary(payload.into())) {
-                    Ok(()) => progressed = true,
+                    Ok(()) => {
+                        written += 1;
+                        progressed = true;
+                    }
                     Err(error) if is_transient_io(&error) => {
                         // Tungstenite keeps the failed frame in its own
                         // bounded out-buffer. Re-submitting the payload would
                         // duplicate it; the remaining batch stays queued.
                         flush_pending = true;
+                        written += 1;
                         progressed = true;
                         break;
                     }
@@ -611,6 +647,7 @@ fn ws_actor<S>(
             if !flush_pending {
                 match socket.flush() {
                     Ok(()) => {
+                        flushed.store(written, Ordering::Release);
                         last_activity = Instant::now();
                         if pending_out.is_empty()
                             && let Some(ack) = pending_flush.take()
@@ -784,19 +821,20 @@ fn send_ws_event(recv_tx: &mpsc::SyncSender<WsEvent>, event: WsEvent) {
     let _ = recv_tx.try_send(event);
 }
 
-fn flush_ws_until<S>(socket: &mut WebSocket<S>, stop: &AtomicBool, deadline: Instant)
+fn flush_ws_until<S>(socket: &mut WebSocket<S>, stop: &AtomicBool, deadline: Instant) -> bool
 where
     S: Read + Write,
 {
     while Instant::now() < deadline && !stop.load(Ordering::Acquire) {
         match socket.flush() {
-            Ok(()) => return,
+            Ok(()) => return true,
             Err(error) if is_transient_io(&error) => {
                 thread::sleep(Duration::from_millis(1));
             }
-            Err(_) => return,
+            Err(_) => return false,
         }
     }
+    false
 }
 
 fn accept_ws_polling(
@@ -2440,6 +2478,216 @@ mod tests {
         assert_eq!(receiver.recv_timeout(Duration::from_secs(3)).unwrap(), 0x71);
         server.close();
         client.close();
+    }
+
+    #[test]
+    fn peer_close_preserves_an_already_flushed_noise_handshake() {
+        struct DeferredFlushWire {
+            inner: WsNoiseWire,
+            entered: mpsc::Sender<()>,
+            resume: Mutex<mpsc::Receiver<()>>,
+        }
+
+        impl NoiseWire for DeferredFlushWire {
+            fn send_plain(&self, payload: &[u8]) -> Result<()> {
+                self.inner.send_plain(payload)
+            }
+
+            fn recv_plain(&self) -> Result<Vec<u8>> {
+                self.inner.recv_plain()
+            }
+
+            fn recv_plain_timeout(&self, timeout: Duration) -> Result<Vec<u8>> {
+                self.inner.recv_plain_timeout(timeout)
+            }
+
+            fn flush_plain(&self) -> Result<()> {
+                self.entered.send(()).unwrap();
+                self.resume
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap();
+                self.inner.flush_plain()
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap().to_string();
+        let (session_tx, session_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let server = thread::spawn(move || -> Result<Vec<u8>> {
+            let (stream, _) = listener.accept()?;
+            let closer = stream.try_clone()?;
+            let socket = tungstenite::accept_with_config(stream, Some(ws_config()))
+                .map_err(|error| Error::Other(error.to_string()))?;
+            let session = WsSession::start(
+                socket,
+                Arc::new(move |how| {
+                    let _ = closer.shutdown(how);
+                }),
+            )?;
+            session_tx.send(session.clone()).unwrap();
+            let intro = session.recv_timeout(Duration::from_secs(3))?;
+            let wire = Arc::new(DeferredFlushWire {
+                inner: WsNoiseWire { session },
+                entered: entered_tx,
+                resume: Mutex::new(resume_rx),
+            });
+            let noise = handshake_responder(
+                wire,
+                &intro,
+                NoiseTransport::Http,
+                NoiseKind::Main,
+                STREAM_RECORD_PAYLOAD,
+                STREAM_RECORD_MAX,
+            )?;
+            let payload = noise.recv()?;
+            assert!(noise.recv().is_err());
+            assert!(noise.remote_finished());
+            Ok(payload)
+        });
+
+        let mut client = WSConnection::connect_direct(&address).unwrap();
+        let session = session_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let payload = ProtocolMessage::build(0x71, "close", "final-message").unwrap();
+        client.send(&payload).unwrap();
+        let started = Instant::now();
+        client.close();
+        assert!(started.elapsed() < Duration::from_secs(3));
+
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let observer_session = session.clone();
+        let observer = thread::spawn(move || {
+            observer_session.join();
+            finished_tx.send(()).unwrap();
+        });
+        let finished = finished_rx.recv_timeout(Duration::from_secs(3)).is_ok();
+        if !finished {
+            session.shutdown();
+        }
+        observer.join().unwrap();
+        resume_tx.send(()).unwrap();
+        let received = server.join().unwrap();
+        assert!(finished, "peer Close did not finish the actor");
+        assert!(session.actor_finished());
+        assert_eq!(received.unwrap(), payload);
+    }
+
+    #[test]
+    fn flush_barriers_track_only_fully_written_batches() {
+        struct ScriptedStream {
+            stream: TcpStream,
+            resume: mpsc::Receiver<()>,
+            bytes: Arc<Mutex<Vec<u8>>>,
+            fail: bool,
+            blocked: bool,
+        }
+
+        impl Read for ScriptedStream {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                self.stream.read(bytes)
+            }
+        }
+
+        impl Write for ScriptedStream {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.fail {
+                    return Err(std::io::ErrorKind::BrokenPipe.into());
+                }
+                if !self.blocked {
+                    self.blocked = true;
+                    return Err(std::io::ErrorKind::WouldBlock.into());
+                }
+                self.bytes.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl WsReadControl for ScriptedStream {
+            fn set_ws_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+                self.stream.set_read_timeout(timeout)
+            }
+
+            fn enable_ws_nonblocking_poll(&self) -> std::io::Result<bool> {
+                self.resume.recv_timeout(Duration::from_secs(3)).unwrap();
+                self.stream.set_nonblocking(true)?;
+                Ok(true)
+            }
+
+            fn wait_ws_activity(
+                &self,
+                wake: &SocketWake,
+                readable: bool,
+                writable: bool,
+                timeout: Duration,
+            ) -> std::io::Result<bool> {
+                wait_tcp_activity(&self.stream, wake, readable, writable, timeout)
+            }
+        }
+
+        for fail in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let _peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let (stream, _) = listener.accept().unwrap();
+            let closer = stream.try_clone().unwrap();
+            let bytes = Arc::new(Mutex::new(Vec::new()));
+            let (resume_tx, resume) = mpsc::channel();
+            let socket = WebSocket::from_raw_socket(
+                ScriptedStream {
+                    stream,
+                    resume,
+                    bytes: bytes.clone(),
+                    fail,
+                    blocked: false,
+                },
+                tungstenite::protocol::Role::Client,
+                Some(ws_config()),
+            );
+            let session = WsSession::start(
+                socket,
+                Arc::new(move |how| {
+                    let _ = closer.shutdown(how);
+                }),
+            )
+            .unwrap();
+            for value in 0..3 {
+                session.send(&[value]).unwrap();
+            }
+            let (ack_tx, ack_rx) = mpsc::sync_channel(1);
+            session.send_tx.try_send(WsCommand::Flush(ack_tx)).unwrap();
+            resume_tx.send(()).unwrap();
+            ack_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            if fail {
+                session.join();
+                assert_eq!(session.flushed.load(Ordering::Acquire), 0);
+                assert!(session.flush().is_err());
+                assert!(bytes.lock().unwrap().is_empty());
+            } else {
+                assert_eq!(session.flushed.load(Ordering::Acquire), 3);
+                session.flush().unwrap();
+                let mut received = WebSocket::from_raw_socket(
+                    std::io::Cursor::new(bytes.lock().unwrap().clone()),
+                    tungstenite::protocol::Role::Server,
+                    Some(ws_config()),
+                );
+                for value in 0..3 {
+                    assert_eq!(
+                        received.read().unwrap(),
+                        Message::Binary(vec![value].into())
+                    );
+                }
+            }
+            session.close_and_join();
+            assert!(session.actor_finished());
+            assert!(session.send(b"after-close").is_err());
+        }
     }
 
     #[test]
