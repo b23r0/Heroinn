@@ -82,8 +82,8 @@ libc = "0.2"
 nix = "0.31"
 windows-sys = { version = "0.61", features = ["Win32_Networking_WinSock"] }
 
-# Windows-only (kept at legacy versions for now)
-windows = "0.39"
+# Windows-only
+windows = "0.54"
 winreg = "0.10"
 
 [profile.release.package.heroinn_client]

@@ -1044,10 +1044,39 @@ mod tests {
 
     #[cfg(unix)]
     fn write_test_script(path: &Path, contents: &str) {
+        let status = Command::new("sh")
+            .args([
+                "-c",
+                "printf '%s' \"$1\" > \"$2\" && chmod 755 \"$2\"",
+                "heroinn-shell-fixture",
+                contents,
+            ])
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "fixture writer failed: {status}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_script_writer_preserves_literal_contents_and_executable_permissions() {
         use std::os::unix::fs::PermissionsExt;
 
-        fs::write(path, contents).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        let directory = TempDir::new();
+        let path = directory.0.join("shell ' fixture $ `% Ω");
+        let contents =
+            "#!/bin/sh\n# ' \"$HOME\" `uname` % Ω\nprintf '%s' 'fixture output'\nexit 7\n";
+        write_test_script(&path, contents);
+
+        assert_eq!(fs::read(&path).unwrap(), contents.as_bytes());
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        let output = Command::new(&path).output().unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(output.stdout, b"fixture output");
+        assert!(output.stderr.is_empty());
     }
 
     #[cfg(windows)]

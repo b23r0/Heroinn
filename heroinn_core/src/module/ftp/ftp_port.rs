@@ -216,7 +216,7 @@ impl FtpInstance {
         if cfg!(target_os = "windows") {
             #[cfg(target_os = "windows")]
             unsafe {
-                match windows::Win32::System::Threading::OpenProcess(
+                let _ = match windows::Win32::System::Threading::OpenProcess(
                     windows::Win32::System::Threading::PROCESS_TERMINATE,
                     false,
                     self.pid,
